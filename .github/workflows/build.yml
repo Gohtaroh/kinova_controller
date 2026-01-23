@@ -1,4 +1,4 @@
-name: CI of NewFSMController
+name: CI of KinovaController
 
 on:
   push:

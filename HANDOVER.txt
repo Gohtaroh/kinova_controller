@@ -1,0 +1,149 @@
+================================================================================
+KINOVA CONTROLLER PROJECT - HANDOVER DOCUMENT
+================================================================================
+Last Updated: 2026-01-23
+Author: AI Assistant (Claude)
+
+================================================================================
+1. BACKGROUND
+================================================================================
+
+This workspace contains an mc_rtc-based control system for KINOVA Gen3 robot arm.
+The original setup was done by Bastien Muraccioli (external engineer).
+
+Key Points:
+- User (Gohtaroh) needs to control KINOVA robot arm
+- Original engineer is no longer available for direct support
+- System uses mc_rtc framework for real-time robot control
+
+Repository Structure:
+- superbuild repo: https://github.com/Gohtaroh/mc-rtc-superbuild
+  - Contains mc_rtc, mc_kortex, mc_kinova, and other libraries
+  - This is the "infrastructure" - rarely needs editing
+
+- kinova_controller repo: https://github.com/Gohtaroh/kinova_controller
+  - Forked from: https://github.com/mc-rtc/new-fsm-controller
+  - This is the USER'S CODE - where custom control logic goes
+
+================================================================================
+2. WORKSPACE STRUCTURE
+================================================================================
+
+/home/aisthri/workspace/
+├── mc-rtc-superbuild/     <- Build system (Bastien's setup, forked by user)
+├── src/
+│   ├── mc_rtc/            <- Core framework (DO NOT EDIT)
+│   ├── mc_kortex/         <- KINOVA hardware interface (DO NOT EDIT)
+│   ├── mc_kinova/         <- KINOVA robot definition (DO NOT EDIT)
+│   ├── monodzukuri2024_kinova_demo/  <- Reference only (complex demo)
+│   └── kinova_controller/ <- USER'S CONTROLLER (EDIT THIS)
+├── build/                 <- Compiled binaries
+└── install/               <- Installed packages
+
+================================================================================
+3. COMPLETED TASKS
+================================================================================
+
+[DONE] Cloned kinova_controller from GitHub
+       Location: /home/aisthri/workspace/src/kinova_controller/
+
+[DONE] Renamed all files and references from "NewFSMController" to "KinovaController"
+       Files renamed:
+       - src/NewFSMController.cpp -> src/KinovaController.cpp
+       - src/NewFSMController.h -> src/KinovaController.h
+       - etc/NewFSMController.in.yaml -> etc/KinovaController.in.yaml
+       - src/states/NewFSMController_Initial.cpp -> src/states/KinovaController_Initial.cpp
+       - src/states/NewFSMController_Initial.h -> src/states/KinovaController_Initial.h
+
+[DONE] Updated all internal references in:
+       - CMakeLists.txt (root and src/)
+       - api.h
+       - lib.cpp
+       - vcpkg.json
+       - .github/workflows/build.yml
+       - tests/etc/mc_rtc.yaml
+       - tests/CMakeLists.txt
+
+================================================================================
+4. NEXT STEPS (TODO)
+================================================================================
+
+[TODO] Update etc/KinovaController.in.yaml for KINOVA robot
+       Current: Uses JVRC1 (humanoid robot) configuration
+       Needed: Change to KINOVA Gen3 configuration
+
+       Key changes needed:
+       - Remove "ground" robot (KINOVA is arm, not legged robot)
+       - Remove foot contacts (LeftFoot, RightFoot)
+       - Change robot-specific settings from "jvrc1" to "kinova"
+       - Add KINOVA-specific constraints
+
+[TODO] Build the controller
+       Command: cd /home/aisthri/workspace && cmake --build build --target KinovaController
+
+[TODO] Configure mc_rtc to use KinovaController
+       Edit: ~/.config/mc_rtc/mc_rtc.yaml
+       Set: MainRobot and Enabled fields
+
+[TODO] Test in simulation
+       Command: mc_mujoco --sync
+
+[TODO] Test on real robot
+       Command: mc_kortex
+       GUI: mc_rviz
+
+================================================================================
+5. IMPORTANT COMMANDS
+================================================================================
+
+# Run simulation
+mc_mujoco --sync
+
+# Run on real KINOVA robot
+mc_kortex
+
+# GUI for real robot
+mc_rviz
+
+================================================================================
+6. KEY FILES TO EDIT
+================================================================================
+
+For custom control logic:
+- /home/aisthri/workspace/src/kinova_controller/src/KinovaController.cpp
+- /home/aisthri/workspace/src/kinova_controller/src/KinovaController.h
+
+For FSM states:
+- /home/aisthri/workspace/src/kinova_controller/src/states/KinovaController_Initial.cpp
+- /home/aisthri/workspace/src/kinova_controller/src/states/KinovaController_Initial.h
+
+For configuration:
+- /home/aisthri/workspace/src/kinova_controller/etc/KinovaController.in.yaml
+
+================================================================================
+7. REFERENCE: MonodzukuriDemo
+================================================================================
+
+Location: /home/aisthri/workspace/src/monodzukuri2024_kinova_demo/
+
+This is a complex demo controller with:
+- OpenGL GUI
+- Gamepad support
+- Multiple FSM states (Compliance, MinJerk, NullSpace, etc.)
+- Fitts' Law experiment
+
+Use as REFERENCE ONLY for how to implement KINOVA-specific features.
+Do NOT copy directly - it's too complex for a starting point.
+
+================================================================================
+8. CONTACTS
+================================================================================
+
+- Bastien Muraccioli: Original engineer (external)
+  - Asked to be added as collaborator on both repos
+  - superbuild repo: https://github.com/Gohtaroh/mc-rtc-superbuild
+  - kinova_controller repo: https://github.com/Gohtaroh/kinova_controller
+
+================================================================================
+END OF HANDOVER DOCUMENT
+================================================================================

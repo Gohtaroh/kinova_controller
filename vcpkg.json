@@ -1,8 +1,8 @@
 {
-  "name": "mc-rtc-new-fsm-controller",
+  "name": "kinova-controller",
   "version-string": "1.0.0",
   "homepage": "",
-  "description": "NewFSMController for mc_rtc",
+  "description": "KinovaController for mc_rtc",
   "dependencies": [
     "mc-rtc"
   ]
