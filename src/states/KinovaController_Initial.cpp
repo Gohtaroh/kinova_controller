@@ -12,8 +12,8 @@ void KinovaController_Initial::start(mc_control::fsm::Controller & ctl_)
 bool KinovaController_Initial::run(mc_control::fsm::Controller & ctl_)
 {
   auto & ctl = static_cast<KinovaController &>(ctl_);
-  output("OK");
-  return true;
+  // output("OK");
+  return false;
 }
 
 void KinovaController_Initial::teardown(mc_control::fsm::Controller & ctl_)
