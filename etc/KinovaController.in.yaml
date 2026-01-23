@@ -30,7 +30,9 @@ collisions:
 states: {}
 # Transitions map
 transitions:
-- [KinovaController_Initial, OK, KinovaController_Initial, Strict]
+- [KinovaController_Initial, LinearMov, KinovaController_LinearMov, Strict] # Replace Strict with Auto if you want automatic transitions (depending on output text, here "LinearMov")
+- [KinovaController_LinearMov, OK, KinovaController_Initial, Strict]
+
 # Initial state
 init: KinovaController_Initial
 

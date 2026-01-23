@@ -17,6 +17,9 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
   std::shared_ptr<mc_tasks::CompliantPostureTask> compPostureTask;
   std::shared_ptr<mc_tasks::CompliantEndEffectorTask> compEETask;
 
+  // Targets
+  std::map<std::string, std::vector<double>> postureHome;
+
 private:
   mc_rtc::Configuration config_;
 };

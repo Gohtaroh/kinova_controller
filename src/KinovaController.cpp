@@ -13,12 +13,14 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
 
   // Create the compliant posture task
   compPostureTask = std::make_shared<mc_tasks::CompliantPostureTask>(
-      solver(), robot().robotIndex(), 1.0, 1.0);
+      solver(), robot().robotIndex(), 100.0, 1.0);
   solver().addTask(compPostureTask);
 
   // Create the compliant end-effector task
   compEETask = std::make_shared<mc_tasks::CompliantEndEffectorTask>(
-      "end_effector_link", robots(), robot().robotIndex(), 1.0, 1000.0);
+      "end_effector_link", robots(), robot().robotIndex(), 100.0, 1000.0);
+
+  compEETask->reset();
   solver().addTask(compEETask);
 
   // Set control mode in datastore

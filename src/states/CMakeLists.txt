@@ -1,3 +1,4 @@
 add_fsm_state_simple(KinovaController_Initial)
+add_fsm_state_simple(KinovaController_LinearMov)
 
 add_fsm_data_directory(data)
