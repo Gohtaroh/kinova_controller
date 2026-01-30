@@ -1,4 +1,7 @@
 add_fsm_state_simple(KinovaController_Initial)
-add_fsm_state_simple(KinovaController_LinearMov)
+add_fsm_state_simple(KinovaController_ConstantVel)
+add_fsm_state_simple(KinovaController_TrapezoidalVel)
+add_fsm_state_simple(KinovaController_MinimumJerk)
+add_fsm_state_simple(KinovaController_PrepareMovement)
 
 add_fsm_data_directory(data)

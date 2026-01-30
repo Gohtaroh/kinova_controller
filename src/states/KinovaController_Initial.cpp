@@ -13,13 +13,15 @@ void KinovaController_Initial::start(mc_control::fsm::Controller & ctl_)
   }
   // Setting residual gain of external forces estimator
   ctl.datastore().call<void, double>("EF_Estimator::setGain", 30.0);
+  ctl.compPostureTask->target(ctl.postureHome);
+  ctl.postureTask->stiffness(50.0);
+  ctl.compPostureTask->damping(20.0);
+  ctl.solver().removeTask(ctl.compEETask);
 }
 
 bool KinovaController_Initial::run(mc_control::fsm::Controller & ctl_)
 {
   auto & ctl = static_cast<KinovaController &>(ctl_);
-  // output("LinearMov");
-  // return true; to transition
   return false;
 }
 

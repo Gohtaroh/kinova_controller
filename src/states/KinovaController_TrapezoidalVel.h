@@ -2,7 +2,11 @@
 
 #include <mc_control/fsm/State.h>
 
-struct KinovaController_LinearMov : mc_control::fsm::State
+#define START_POS_STATE 0
+#define REPEAT_STATE 1
+#define STOP_STATE 2
+
+struct KinovaController_TrapezoidalVel : mc_control::fsm::State
 {
 
   void configure(const mc_rtc::Configuration & config) override;
@@ -15,4 +19,11 @@ struct KinovaController_LinearMov : mc_control::fsm::State
 
 private:
   bool moveBackward_ = false;
+  double currentVelocity_ = 0.0;
+  double aMax_ = 1.0;
+  int state_ = START_POS_STATE;
+  int repeatCount_ = 0;
+  int maxRepeats_ = 3;
+  double retractVelocity_ = 0.05;
+  double approachVelocity_ = 0.2;
 };

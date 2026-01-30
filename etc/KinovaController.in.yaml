@@ -27,11 +27,42 @@ collisions:
   useMinimal: true
 
 # Implement some additional text states
-states: {}
+states: 
+  ConstantVel_FSM:
+    base: Meta
+    Managed: false
+    StepByStep: true
+    transitions:
+      - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
+      - [KinovaController_PrepareMovement, OK, KinovaController_ConstantVel, Auto]
+      - [KinovaController_ConstantVel, OK, KinovaController_Initial, Strict]
+
+  TrapezoidalVel_FSM:
+    base: Meta
+    Managed: false
+    StepByStep: true
+    transitions:
+      - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
+      - [KinovaController_PrepareMovement, OK, KinovaController_TrapezoidalVel, Auto]
+      - [KinovaController_TrapezoidalVel, OK, KinovaController_Initial, Strict]
+
+  MinimumJerk_FSM:
+    base: Meta
+    Managed: false
+    StepByStep: true
+    transitions:
+      - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
+      - [KinovaController_PrepareMovement, OK, KinovaController_MinimumJerk, Auto]
+      - [KinovaController_MinimumJerk, OK, KinovaController_Initial, Strict]
+
 # Transitions map
 transitions:
-- [KinovaController_Initial, LinearMov, KinovaController_LinearMov, Strict] # Replace Strict with Auto if you want automatic transitions (depending on output text, here "LinearMov")
-- [KinovaController_LinearMov, OK, KinovaController_Initial, Strict]
+- [KinovaController_Initial, ConstantVel, ConstantVel_FSM, Strict]
+- [ConstantVel_FSM, OK, KinovaController_Initial, Strict]
+- [KinovaController_Initial, TrapezoidalVel, TrapezoidalVel_FSM, Strict]
+- [TrapezoidalVel_FSM, OK, KinovaController_Initial, Strict]
+- [KinovaController_Initial, MinimumJerk, MinimumJerk_FSM, Strict]
+- [MinimumJerk_FSM, OK, KinovaController_Initial, Strict]
 
 # Initial state
 init: KinovaController_Initial
@@ -42,3 +73,5 @@ ObserverPipelines:
     - type: Encoder
       config:
         velocity: encoderVelocities
+
+frame: "end_effector_link"
