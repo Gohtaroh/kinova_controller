@@ -49,7 +49,6 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   cardPosition_3 = Eigen::Vector3d(0.7, 0.2, 0.2);
 
   // Set control mode in datastore
-  // datastore().make<std::string>("ControlMode", "Torque");
   datastore().make<std::string>("TorqueMode", "Custom");
   datastore().make<std::string>("ControlMode", "Position");
   datastore().make_call("getPostureTask", [this]() -> mc_tasks::PostureTaskPtr { return postureTask; });
