@@ -1,0 +1,7 @@
+# ビルド成果物（GitHubに上げない。buildはsuperbuildが張るシンボリックリンクのこともある）
+build
+build/
+compile_commands.json
+
+# ローカル管理の引き継ぎ文書（GitHubに上げない）
+GRIPPER_HANDOVER_PLAN.md
