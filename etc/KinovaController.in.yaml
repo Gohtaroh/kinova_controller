@@ -27,7 +27,7 @@ collisions:
   useMinimal: true
 
 # Implement some additional text states
-states: 
+states:
   ConstantVel_FSM:
     base: Meta
     Managed: false
@@ -63,6 +63,9 @@ transitions:
 - [TrapezoidalVel_FSM, OK, KinovaController_Initial, Strict]
 - [KinovaController_Initial, MinimumJerk, MinimumJerk_FSM, Strict]
 - [MinimumJerk_FSM, OK, KinovaController_Initial, Strict]
+# One-button demo: wrist 180deg -> gripper close -> open -> wrist back -> auto return
+- [KinovaController_Initial, TestSequence, KinovaController_TestSequence, Strict]
+- [KinovaController_TestSequence, OK, KinovaController_Initial, Auto]
 
 # Initial state
 init: KinovaController_Initial
