@@ -55,8 +55,8 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
     if(gripper.overCommandLimitIterN() <= 1)
     {
       // Real-robot module defaults command at 99% of the URDF joint velocity; keep the
-      // close gentle and predictable for handover use
-      gripper.percentVMAX(0.25);
+      // close reasonably quick but not slamming (real Robotiq limits grasp force internally)
+      gripper.percentVMAX(0.5);
     }
   }
 
