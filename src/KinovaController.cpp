@@ -42,27 +42,21 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   cardPosition_2 = Eigen::Vector3d(0.7, -0.2, 0.2);
   cardPosition_3 = Eigen::Vector3d(0.7, 0.2, 0.2);
 
-  // Relax the gripper safety for the real Robotiq 2F-85: the module defaults for the
-  // real robot (percentVMAX 0.99, trigger 0.05 rad, 1 iteration) abort the close almost
-  // immediately because the hardware lags the commanded trajectory. The MuJoCo module
-  // ships its own tuned values (0.5, 0.18, 0.02, 10) — leave those untouched, so only
-  // adjust when the instant-abort real-robot defaults (iterN <= 1) are detected
+  // Disable the mc_rtc gripper divergence safety on this reversed gripper: on trigger
+  // the release offset is applied in the wrong direction, causing chatter during the
+  // close and snapping the gripper open (observed on both MuJoCo and the real robot,
+  // 2026-07-06; confirmed working with the threshold maxed out from the GUI).
+  // Force protection is handled elsewhere anyway: the real Robotiq 2F-85 limits its
+  // grasp force internally, and the MuJoCo actuator is force-capped in the model.
   if(robot().hasGripper("gripper"))
   {
     auto & gripper = robot().gripper("gripper");
+    gripper.actualCommandDiffTrigger(10.0); // joint range is 0.8 rad, can never trigger
     if(gripper.overCommandLimitIterN() <= 1)
     {
+      // Real-robot module defaults command at 99% of the URDF joint velocity; keep the
+      // close gentle and predictable for handover use
       gripper.percentVMAX(0.25);
-      gripper.actualCommandDiffTrigger(mc_rtc::constants::toRad(8.));
-      gripper.overCommandLimitIterN(100);
-    }
-    else
-    {
-      // Simulation (MuJoCo module defaults): disable the safety entirely. The sim
-      // gripper is a soft tendon servo (force capped at 5N in the model) that lags
-      // the command enough to trip the safety, and the release direction is inverted
-      // for this reversed gripper, snapping it fully open mid-close
-      gripper.actualCommandDiffTrigger(10.0); // joint range is 0.8 rad, can never trigger
     }
   }
 
