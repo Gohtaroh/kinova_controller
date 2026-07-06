@@ -4,5 +4,6 @@ add_fsm_state_simple(KinovaController_TrapezoidalVel)
 add_fsm_state_simple(KinovaController_MinimumJerk)
 add_fsm_state_simple(KinovaController_PrepareMovement)
 add_fsm_state_simple(KinovaController_TestSequence)
+add_fsm_state_simple(KinovaController_BottlePick)
 
 add_fsm_data_directory(data)

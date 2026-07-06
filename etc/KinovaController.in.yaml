@@ -66,6 +66,9 @@ transitions:
 # One-button demo: wrist 180deg -> gripper close -> open -> wrist back -> auto return
 - [KinovaController_Initial, TestSequence, KinovaController_TestSequence, Strict]
 - [KinovaController_TestSequence, OK, KinovaController_Initial, Auto]
+# One-button bottle pick: open -> poseA -> close 43% -> poseB -> hold (OK returns home)
+- [KinovaController_Initial, BottlePick, KinovaController_BottlePick, Strict]
+- [KinovaController_BottlePick, OK, KinovaController_Initial, Strict]
 
 # Initial state
 init: KinovaController_Initial
