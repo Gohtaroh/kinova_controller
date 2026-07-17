@@ -87,6 +87,16 @@ private:
   double gripperSettle_ = 0.5; // [s] minimum wait before checking gripper completion
   double convergenceGrace_ = 3.0; // [s] extra time allowed to converge before moving on
 
+  // Trajectory style. Both are ALWAYS overwritten in start() from the controller's
+  // active handover condition, so these initializers are only a fallback for
+  // standalone use. alpha_ blends the joint-space time scaling: 0 = constant
+  // velocity (mechanical), 1 = minimum jerk (human-like, = the verified 2026-07-06
+  // profile). speedScale_ multiplies every move speed so the whole sequence runs at
+  // one tempo. The active default is whatever condition the controller selects
+  // (see KinovaController handoverCondition_), NOT necessarily these values.
+  double alpha_ = 1.0;
+  double speedScale_ = 1.0;
+
   std::vector<double> startQ_;
   std::vector<double> targetQ_;
   double t_ = 0.0;
@@ -101,6 +111,12 @@ private:
   bool baselineCaptured_ = false; // whether the resting external-torque baseline is set
   double baselineJoint2_ = 0.0; // resting joint_2 external torque at the present pose
   double baselineJoint4_ = 0.0; // resting joint_4 external torque at the present pose
+  // Latest pull-detection signals, exposed to the mc_rtc logger during HOLDING so the
+  // settling drift and pull can be plotted and the thresholds/settle times tuned.
+  double lastTau2_ = 0.0; // latest joint_2 external-torque estimate
+  double lastTau4_ = 0.0; // latest joint_4 external-torque estimate
+  double lastD2_ = 0.0; // latest joint_2 deviation from baseline
+  double lastD4_ = 0.0; // latest joint_4 deviation from baseline
 
   /** Start a minimum-jerk posture move to poseDeg. If continuous, the move starts
    *  from the previous segment's commanded end (for a hitch-free waypoint chain);

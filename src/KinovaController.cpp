@@ -1,5 +1,6 @@
 #include "KinovaController.h"
 #include <mc_rtc/constants.h>
+#include <mc_rtc/gui/ComboInput.h>
 #include <mc_rtc/logging.h>
 #include <cmath>
 
@@ -8,6 +9,44 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
 {
 
   frame_ = config("frame", (std::string) "end_effector_link");
+
+  // Handover-condition parameters (speed scale + trajectory blend alpha per
+  // condition). Overridable from the controller config so the pilot can retune
+  // the levels without recompiling; sizes must stay consistent with the names.
+  config("handoverSpeedScales", handoverSpeedScales_);
+  config("handoverAlphas", handoverAlphas_);
+  config("handoverArmDelays", handoverArmDelays_);
+  if(handoverSpeedScales_.size() != handoverConditionNames_.size()
+     || handoverAlphas_.size() != handoverConditionNames_.size()
+     || handoverArmDelays_.size() != handoverConditionNames_.size())
+  {
+    mc_rtc::log::error_and_throw<std::runtime_error>(
+        "[KinovaController] handoverSpeedScales / handoverAlphas / handoverArmDelays must each have {} entries",
+        handoverConditionNames_.size());
+  }
+  // Value ranges: alpha must stay in [0,1] (outside it the blended time scaling
+  // reverses direction and 'speed' stops meaning peak velocity); speed scale must
+  // be strictly positive (a zero scale makes the move duration infinite and stalls
+  // the FSM, a negative one is silently floored to a wrong duration). Fail fast so a
+  // bad config can never feed a reversed or NaN posture target to the arm.
+  for(size_t i = 0; i < handoverConditionNames_.size(); ++i)
+  {
+    if(!(handoverAlphas_[i] >= 0.0 && handoverAlphas_[i] <= 1.0))
+    {
+      mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] handoverAlphas[{}] = {} out of range [0, 1]",
+                                                       i, handoverAlphas_[i]);
+    }
+    if(!(handoverSpeedScales_[i] > 0.0))
+    {
+      mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] handoverSpeedScales[{}] = {} must be > 0", i,
+                                                       handoverSpeedScales_[i]);
+    }
+    if(!(handoverArmDelays_[i] >= 0.0))
+    {
+      mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] handoverArmDelays[{}] = {} must be >= 0", i,
+                                                       handoverArmDelays_[i]);
+    }
+  }
 
   // Initialize the constraints
   selfCollisionConstraint->setCollisionsDampers(solver(), {1.1, 9.0});
@@ -80,6 +119,24 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                         "Direction Vector", {"x", "y", "z"}, [this]() { return directionVec; },
                         [this](const Eigen::Vector3d & dir) { directionVec = dir; }));
 
+  // Handover motion-style selector: pick the condition before triggering BottlePick.
+  gui()->addElement({"KinovaController", "Handover"},
+                    mc_rtc::gui::ComboInput(
+                        "Condition", handoverConditionNames_,
+                        [this]() -> const std::string & { return handoverConditionNames_[handoverCondition_]; },
+                        [this](const std::string & name)
+                        {
+                          for(size_t i = 0; i < handoverConditionNames_.size(); ++i)
+                          {
+                            if(handoverConditionNames_[i] == name)
+                            {
+                              handoverCondition_ = i;
+                            }
+                          }
+                          mc_rtc::log::info("[KinovaController] Handover condition -> {} (speed x{:.3f}, alpha {:.2f})",
+                                            handoverConditionName(), handoverSpeedScale(), handoverAlpha());
+                        }));
+
   gui()->addElement({"KinovaController", "Movement"}, mc_rtc::gui::Point3DRO("Final Position", finalEEPosition_));
   gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 1", cardPosition_1));
   gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 2", cardPosition_2));
@@ -103,6 +160,10 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   logger().addLogEntry("KinovaController_TotalTime", [this]() { return tf_; });
   logger().addLogEntry("KinovaController_PlannerDistance",
                        [this]() { return (finalEEPosition_ - cardPosition_1).norm(); });
+  // Log the active handover condition so the pilot can report as-implemented
+  // kinematics (speed scale, blend alpha) per condition for the manipulation check.
+  logger().addLogEntry("KinovaController_HandoverAlpha", [this]() { return handoverAlpha(); });
+  logger().addLogEntry("KinovaController_HandoverSpeedScale", [this]() { return handoverSpeedScale(); });
 
   mc_rtc::log::success("KinovaController init done ");
 }

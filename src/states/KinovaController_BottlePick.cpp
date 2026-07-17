@@ -32,6 +32,15 @@ void KinovaController_BottlePick::configure(const mc_rtc::Configuration & config
 void KinovaController_BottlePick::start(mc_control::fsm::Controller & ctl_)
 {
   auto & ctl = static_cast<KinovaController &>(ctl_);
+  // Adopt the active handover condition (motion style) for the whole sequence, so
+  // the pick, lift, present and return all share one tempo and smoothness.
+  alpha_ = ctl.handoverAlpha();
+  speedScale_ = ctl.handoverSpeedScale();
+  // Sharper stops (alpha < 1) need a longer settle before the pull-detection baseline
+  // is captured, else the arrival transient is misread as a pull (bottle self-releases).
+  armDelay_ = ctl.handoverArmDelay();
+  mc_rtc::log::info("[BottlePick] Handover condition: {} (speed x{:.3f}, alpha {:.2f}, armDelay {:.2f}s)",
+                    ctl.handoverConditionName(), speedScale_, alpha_, armDelay_);
   // Self-contained: this state only uses the posture task
   ctl.solver().removeTask(ctl.compEETask);
   ctl.robot().gripper("gripper").setTargetOpening(1.0);
@@ -41,6 +50,13 @@ void KinovaController_BottlePick::start(mc_control::fsm::Controller & ctl_)
   // way around and trips the e-stop).
   ctl.gui()->addElement({"BottlePick"},
                         mc_rtc::gui::Button("Return home (safe)", [this]() { returnRequested_ = true; }));
+
+  // Log the pull-detection signals so the settling drift and the pull are plottable
+  // (mc_rtc log / plot), for tuning the per-condition settle time and thresholds.
+  ctl.logger().addLogEntry("BottlePick_tau2", [this]() { return lastTau2_; });
+  ctl.logger().addLogEntry("BottlePick_tau4", [this]() { return lastTau4_; });
+  ctl.logger().addLogEntry("BottlePick_d2", [this]() { return lastD2_; });
+  ctl.logger().addLogEntry("BottlePick_d4", [this]() { return lastD4_; });
 
   // Resolve where joint_2 / joint_4 live in the DoF vector so we can index the
   // external-torque estimate correctly, and check the estimator read-call exists.
@@ -86,8 +102,12 @@ void KinovaController_BottlePick::initMove(mc_control::fsm::Controller & ctl_,
     targetQ_.push_back(target);
     maxDelta = std::max(maxDelta, std::abs(target - ref));
   }
-  // 1.875 = peak velocity factor of the minimum jerk profile
-  tf_ = std::max(1.875 * maxDelta / speed, 0.5);
+  // speed is the target peak joint velocity. The blended profile's peak/mean
+  // velocity ratio is (1 + 0.875*alpha) (1.0 for constant velocity, 1.875 for
+  // minimum jerk), so tf = ratio * distance / peak_speed keeps `speed` meaning
+  // peak velocity across all alpha. speedScale_ applies the condition's tempo.
+  const double peakFactor = 1.0 + 0.875 * alpha_;
+  tf_ = std::max(peakFactor * maxDelta / (speed * speedScale_), 0.5);
   t_ = 0.0;
 }
 
@@ -96,7 +116,13 @@ bool KinovaController_BottlePick::moveDone(mc_control::fsm::Controller & ctl_, b
   auto & ctl = static_cast<KinovaController &>(ctl_);
   t_ += ctl.timeStep;
   double u = std::min(t_ / tf_, 1.0);
-  double s = u * u * u * (10.0 + u * (-15.0 + 6.0 * u)); // minimum jerk time scaling
+  // Blend constant-velocity (u) and minimum-jerk (quintic) time scalings by alpha_.
+  // alpha 0 -> constant velocity (sharp start/stop), alpha 1 -> minimum jerk (eased).
+  // s(0)=0, s(1)=1 and ds/du >= 0 for all alpha in [0,1], so the target is
+  // continuous and never reverses. The endpoint rate scales with (1-alpha), which
+  // is the perceptual "kick" cue the conditions vary.
+  double mj = u * u * u * (10.0 + u * (-15.0 + 6.0 * u)); // minimum-jerk time scaling
+  double s = (1.0 - alpha_) * u + alpha_ * mj;
   std::map<std::string, std::vector<double>> target;
   double maxErr = 0.0;
   for(size_t i = 0; i < jointNames.size(); ++i)
@@ -197,6 +223,8 @@ bool KinovaController_BottlePick::run(mc_control::fsm::Controller & ctl_)
         const Eigen::VectorXd tauExt = ctl.datastore().call<Eigen::VectorXd>("EF_Estimator::getExternalTorques");
         double t2 = tauExt[dofJoint2_];
         double t4 = tauExt[dofJoint4_];
+        lastTau2_ = t2;
+        lastTau4_ = t4;
         if(!baselineCaptured_)
         {
           // Capture the resting bias (extended arm + bottle weight) as the zero
@@ -211,8 +239,12 @@ bool KinovaController_BottlePick::run(mc_control::fsm::Controller & ctl_)
         {
           double d2 = t2 - baselineJoint2_;
           double d4 = t4 - baselineJoint4_;
+          lastD2_ = d2;
+          lastD4_ = d4;
           // Primary (weight-robust): change from the resting baseline captured for
-          // THIS bottle, so a heavier/lighter condiment doesn't matter.
+          // THIS bottle, so a heavier/lighter condiment doesn't matter. The baseline
+          // is captured only after armDelay_ (long for the abrupt Tool condition) so
+          // the post-stop settling transient has died before it is latched.
           bool deltaOver = (d4 > pullJoint4Thresh_) || (d2 > pullJoint2Thresh_) || (d2 < -pullJoint2Thresh_);
           // Fallback (baseline-independent): strong pull that a polluted baseline
           // would otherwise hide (participant already pulling at capture time).
@@ -272,6 +304,10 @@ bool KinovaController_BottlePick::run(mc_control::fsm::Controller & ctl_)
 void KinovaController_BottlePick::teardown(mc_control::fsm::Controller & ctl_)
 {
   ctl_.gui()->removeElement({"BottlePick"}, "Return home (safe)");
+  ctl_.logger().removeLogEntry("BottlePick_tau2");
+  ctl_.logger().removeLogEntry("BottlePick_tau4");
+  ctl_.logger().removeLogEntry("BottlePick_d2");
+  ctl_.logger().removeLogEntry("BottlePick_d4");
 }
 
 EXPORT_SINGLE_STATE("KinovaController_BottlePick", KinovaController_BottlePick)
