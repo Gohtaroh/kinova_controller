@@ -25,6 +25,9 @@ void KinovaController_BottlePick::configure(const mc_rtc::Configuration & config
   config("pullJoint2Thresh", pullJoint2Thresh_);
   config("pullJoint4Abs", pullJoint4Abs_);
   config("pullJoint2Abs", pullJoint2Abs_);
+  config("earlyPullJoint4Abs", earlyPullJoint4Abs_);
+  config("earlyPullJoint2Abs", earlyPullJoint2Abs_);
+  config("earlyDebounceTime", earlyDebounceTime_);
   config("armDelay", armDelay_);
   config("debounceTime", debounceTime_);
 }
@@ -207,6 +210,7 @@ bool KinovaController_BottlePick::run(mc_control::fsm::Controller & ctl_)
                           "or press \"Return home (safe)\".");
         holdTimer_ = 0.0;
         debounceTimer_ = 0.0;
+        earlyDebounceTimer_ = 0.0;
         baselineCaptured_ = false;
         phase_ = HOLDING;
       }
@@ -216,48 +220,66 @@ bool KinovaController_BottlePick::run(mc_control::fsm::Controller & ctl_)
       holdTimer_ += ctl.timeStep;
       // The operator button is always a valid manual trigger.
       bool release = returnRequested_;
-      // Pull detection: only after a short settle (the move-stop transient pollutes
-      // the estimate), and only once the read-call is available.
-      if(!release && forceDetectAvailable_ && holdTimer_ > armDelay_)
+      if(!release && forceDetectAvailable_)
       {
         const Eigen::VectorXd tauExt = ctl.datastore().call<Eigen::VectorXd>("EF_Estimator::getExternalTorques");
         double t2 = tauExt[dofJoint2_];
         double t4 = tauExt[dofJoint4_];
         lastTau2_ = t2;
         lastTau4_ = t4;
-        if(!baselineCaptured_)
+        bool over = false;
+        // Early strong-pull catch: active even during the settle window (before the
+        // baseline is armed), so a participant who pulls immediately still gets the
+        // bottle. Uses high absolute thresholds set above the post-stop settling
+        // transient, so only a deliberate strong pull fires here (weight-dependent,
+        // like the other absolute net; retune if a much heavier condiment is added).
+        bool earlyOver = (t4 > earlyPullJoint4Abs_) || (t2 > earlyPullJoint2Abs_) || (t2 < -earlyPullJoint2Abs_);
+        // Sensitive baseline-relative detection only after the settle window, once the
+        // resting baseline has been latched (armDelay_ is long for the abrupt Tool
+        // condition so the post-stop settling transient has died before latching).
+        if(holdTimer_ > armDelay_)
         {
-          // Capture the resting bias (extended arm + bottle weight) as the zero
-          // reference, so detection triggers on the change caused by a pull.
-          baselineJoint2_ = t2;
-          baselineJoint4_ = t4;
-          baselineCaptured_ = true;
-          mc_rtc::log::info("[BottlePick] Detection armed, baseline joint_2={:.2f} joint_4={:.2f}", baselineJoint2_,
-                            baselineJoint4_);
-        }
-        else
-        {
-          double d2 = t2 - baselineJoint2_;
-          double d4 = t4 - baselineJoint4_;
-          lastD2_ = d2;
-          lastD4_ = d4;
-          // Primary (weight-robust): change from the resting baseline captured for
-          // THIS bottle, so a heavier/lighter condiment doesn't matter. The baseline
-          // is captured only after armDelay_ (long for the abrupt Tool condition) so
-          // the post-stop settling transient has died before it is latched.
-          bool deltaOver = (d4 > pullJoint4Thresh_) || (d2 > pullJoint2Thresh_) || (d2 < -pullJoint2Thresh_);
-          // Fallback (baseline-independent): strong pull that a polluted baseline
-          // would otherwise hide (participant already pulling at capture time).
-          bool absOver = (t4 > pullJoint4Abs_) || (t2 > pullJoint2Abs_) || (t2 < -pullJoint2Abs_);
-          bool over = deltaOver || absOver;
-          debounceTimer_ = over ? debounceTimer_ + ctl.timeStep : 0.0;
-          if(debounceTimer_ > debounceTime_)
+          if(!baselineCaptured_)
           {
-            mc_rtc::log::info("[BottlePick] Pull detected (d_joint_2={:.2f}, d_joint_4={:.2f}, "
-                              "abs_joint_2={:.2f}, abs_joint_4={:.2f}), releasing",
-                              d2, d4, t2, t4);
-            release = true;
+            // Capture the resting bias (extended arm + bottle weight) as the zero
+            // reference, so detection triggers on the change caused by a pull.
+            baselineJoint2_ = t2;
+            baselineJoint4_ = t4;
+            baselineCaptured_ = true;
+            lastD2_ = 0.0;
+            lastD4_ = 0.0;
+            mc_rtc::log::info("[BottlePick] Detection armed, baseline joint_2={:.2f} joint_4={:.2f}", baselineJoint2_,
+                              baselineJoint4_);
           }
+          else
+          {
+            double d2 = t2 - baselineJoint2_;
+            double d4 = t4 - baselineJoint4_;
+            lastD2_ = d2;
+            lastD4_ = d4;
+            // Primary (weight-robust): change from the resting baseline captured for
+            // THIS bottle, so a heavier/lighter condiment doesn't matter.
+            bool deltaOver = (d4 > pullJoint4Thresh_) || (d2 > pullJoint2Thresh_) || (d2 < -pullJoint2Thresh_);
+            // Fallback (baseline-independent): strong pull that a polluted baseline
+            // would otherwise hide (participant already pulling at capture time).
+            bool absOver = (t4 > pullJoint4Abs_) || (t2 > pullJoint2Abs_) || (t2 < -pullJoint2Abs_);
+            over = deltaOver || absOver;
+          }
+        }
+        // Two independent debounces: the post-arm path fires quickly (0.15 s) on the
+        // sensitive baseline-relative signal; the early path needs a longer continuous
+        // hold (0.35 s) because during the settle window it competes with the choppy
+        // stop transient, which never stays above the level that long but a held pull
+        // does.
+        debounceTimer_ = over ? debounceTimer_ + ctl.timeStep : 0.0;
+        earlyDebounceTimer_ = earlyOver ? earlyDebounceTimer_ + ctl.timeStep : 0.0;
+        if(debounceTimer_ > debounceTime_ || earlyDebounceTimer_ > earlyDebounceTime_)
+        {
+          bool viaEarly = !(debounceTimer_ > debounceTime_);
+          mc_rtc::log::info("[BottlePick] Pull detected (d_joint_2={:.2f}, d_joint_4={:.2f}, "
+                            "abs_joint_2={:.2f}, abs_joint_4={:.2f}, early={}), releasing",
+                            lastD2_, lastD4_, t2, t4, viaEarly);
+          release = true;
         }
       }
       if(release)

@@ -92,7 +92,7 @@ private:
   std::vector<std::string> handoverConditionNames_ = {"Tool", "Baseline", "Partner"};
   std::vector<double> handoverSpeedScales_ = {1.5, 1.1, 0.8};
   std::vector<double> handoverAlphas_ = {0.0, 0.5, 1.0};
-  std::vector<double> handoverArmDelays_ = {3.0, 0.6, 0.2}; // [s] settle before pull detection arms
+  std::vector<double> handoverArmDelays_ = {3.0, 2.0, 0.2}; // [s] settle before pull detection arms
   size_t handoverCondition_ = 1; // default: Baseline
 
   Eigen::Vector3d initialEEPosition_;

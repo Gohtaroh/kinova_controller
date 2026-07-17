@@ -82,6 +82,17 @@ private:
   // below the pull peaks (joint_4 ~2.87, |joint_2| ~4.43).
   double pullJoint4Abs_ = 2.0; // joint_4 raw estimate above this = pull, regardless of baseline
   double pullJoint2Abs_ = 2.5; // |joint_2| raw estimate above this = pull, regardless of baseline
+  // Early strong-pull thresholds, checked even during the settle window (before the
+  // baseline arms) so a participant who pulls immediately still gets the bottle. The
+  // abrupt Tool stop transient reaches the same magnitude as a pull (|t2| ~4), so an
+  // absolute level alone can't separate them; instead we lean on DURATION: the
+  // transient is choppy (dithers, longest run ~0.13 s) while a real pull is sustained,
+  // so the early path requires a longer continuous hold (earlyDebounceTime_) than the
+  // post-arm path. The level is set just below the real pull (~3.3) to catch it.
+  double earlyPullJoint4Abs_ = 2.3; // joint_4 raw estimate above this = candidate pull, during the settle window
+  double earlyPullJoint2Abs_ = 2.8; // |joint_2| raw estimate above this = candidate pull, during the settle window
+  double earlyDebounceTime_ =
+      0.35; // [s] early threshold must hold continuously this long (rejects the choppy transient)
   double armDelay_ = 0.2; // [s] settle time after reaching the present pose before arming detection
   double debounceTime_ = 0.15; // [s] threshold must hold continuously this long to fire
   double gripperSettle_ = 0.5; // [s] minimum wait before checking gripper completion
@@ -104,7 +115,8 @@ private:
   double timer_ = 0.0;
   bool returnRequested_ = false; // set by the GUI "Return home" button
   double holdTimer_ = 0.0; // [s] time spent holding at the present pose
-  double debounceTimer_ = 0.0; // [s] time the pull threshold has been continuously exceeded
+  double debounceTimer_ = 0.0; // [s] time the (post-arm) pull threshold has been continuously exceeded
+  double earlyDebounceTimer_ = 0.0; // [s] time the early strong-pull threshold has been continuously exceeded
   int dofJoint2_ = -1; // DoF-vector index of joint_2 in the external-torque estimate
   int dofJoint4_ = -1; // DoF-vector index of joint_4 in the external-torque estimate
   bool forceDetectAvailable_ = false; // whether the estimator read-call is present
