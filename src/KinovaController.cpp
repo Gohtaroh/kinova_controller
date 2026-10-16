@@ -1,5 +1,6 @@
 #include "KinovaController.h"
 #include <mc_rtc/constants.h>
+#include <mc_rtc/gui/Button.h>
 #include <mc_rtc/gui/ComboInput.h>
 #include <mc_rtc/logging.h>
 #include <cmath>
@@ -77,7 +78,7 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   taskAcceleration = Eigen::Vector3d::Zero();
 
   // Define EE target positions
-  cardPosition_1 = Eigen::Vector3d(0.7, 0.0, 0.2);
+  cardPosition_1 = Eigen::Vector3d(0.4, 0.3, 0.2); // robot-side (closer) + to the side (2026-07-23)
   cardPosition_2 = Eigen::Vector3d(0.7, -0.2, 0.2);
   cardPosition_3 = Eigen::Vector3d(0.7, 0.2, 0.2);
 
@@ -119,8 +120,12 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                         "Direction Vector", {"x", "y", "z"}, [this]() { return directionVec; },
                         [this](const Eigen::Vector3d & dir) { directionVec = dir; }));
 
-  // Handover motion-style selector: pick the condition before triggering BottlePick.
-  gui()->addElement({"KinovaController", "Handover"},
+  // Handover motion-style selector: pick the condition before triggering a pick.
+  // Lives at the TOP of the "Bottle picks" panel (added before the button row, and
+  // elements render in insertion order) so the operator drives the whole session —
+  // condition, NG, and the four bottles — from one panel. Moved out of its own
+  // "Handover" category 2026-07-23 for the pilot.
+  gui()->addElement({"KinovaController", "Bottle picks"},
                     mc_rtc::gui::ComboInput(
                         "Condition", handoverConditionNames_,
                         [this]() -> const std::string & { return handoverConditionNames_[handoverCondition_]; },
@@ -141,6 +146,56 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 1", cardPosition_1));
   gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 2", cardPosition_2));
   gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 3", cardPosition_3));
+
+  // Ordered one-button pick panel, laid out like the physical bench: NG on its own
+  // row, then Bottle1..4 left-to-right below. The FSM's own "Force transition to X"
+  // buttons come out in std::unordered_set hash order (mc_rtc Executor::next), so
+  // Bottle1..4 show up jumbled (e.g. 4,2,3,1); these fixed-order buttons replace
+  // them for daily use. Each triggers the SAME transition (executor_.resume, what
+  // a force-transition button calls) and is guarded to Initial so it can never
+  // interrupt a running pick. Labels are display-only and overridable from the
+  // controller config (recipe contents change per session); the resume target is
+  // the real state name regardless of the label.
+  // NOTE (mc_rtc GUI limits): buttons are plain text buttons — there is no square
+  // or size control and no precise inter-button spacing; all five sit on one
+  // horizontal row in physical order: NG, then Bottle1..4 left-to-right.
+  // Default labels follow README recipe A (Japanese-style): slots 1/2 are fixed
+  // across all recipes (salad oil / vinegar), slots 3/4 change per recipe (A: soy
+  // sauce / granulated sugar; B: mayonnaise / sesame; E: ketchup / sugar), so set
+  // bottleButtonLabels per session for the active recipe.
+  std::vector<std::string> bottleLabels =
+      config("bottleButtonLabels", std::vector<std::string>{"1（サラダ油）", "2（酢）", "3（醤油マヨケチャップ）",
+                                                            "4（グラニュー糖白すりごま）"});
+  if(bottleLabels.size() != 4)
+  {
+    mc_rtc::log::warning("[KinovaController] bottleButtonLabels must have 4 entries (got {}), using defaults",
+                         bottleLabels.size());
+    bottleLabels = {"1（サラダ油）", "2（酢）", "3（醤油マヨケチャップ）", "4（グラニュー糖白すりごま）"};
+  }
+  std::string ngLabel = config("ngButtonLabel", (std::string) "NG 指差し");
+  auto pickButton = [this](const std::string & label, const std::string & target)
+  {
+    return mc_rtc::gui::Button(label,
+                               [this, target]()
+                               {
+                                 if(executor_.state() == "KinovaController_Initial")
+                                 {
+                                   executor_.resume(target);
+                                 }
+                                 else
+                                 {
+                                   mc_rtc::log::warning(
+                                       "[KinovaController] '{}' ignored: pick buttons only work from Initial "
+                                       "(current: {})",
+                                       target, executor_.state());
+                                 }
+                               });
+  };
+  // One horizontal row: NG, then the four bottles left-to-right in physical order.
+  gui()->addElement({"KinovaController", "Bottle picks"}, mc_rtc::gui::ElementsStacking::Horizontal,
+                    pickButton(ngLabel, "KinovaController_NGPoint"), pickButton(bottleLabels[0], "Bottle1"),
+                    pickButton(bottleLabels[1], "Bottle2"), pickButton(bottleLabels[2], "Bottle3"),
+                    pickButton(bottleLabels[3], "Bottle4"));
 
   // Add logging
   logger().addLogEntry("KinovaController_DirectionVec", [this]() { return directionVec; });

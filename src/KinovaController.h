@@ -56,6 +56,12 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
   {
     return handoverConditionNames_[handoverCondition_];
   }
+  // Baseline (centre) condition speed scale, for states that compress the
+  // condition spread around the centre (NGPoint) instead of using the full one.
+  double handoverBaselineSpeedScale() const
+  {
+    return handoverSpeedScales_[1];
+  }
 
   std::shared_ptr<mc_tasks::CompliantPostureTask> compPostureTask;
   std::shared_ptr<mc_tasks::CompliantEndEffectorTask> compEETask;
@@ -90,7 +96,7 @@ private:
   // as alpha drops (sharper stop -> larger torque transient -> longer settle needed).
   // All placeholders to be confirmed by the 7/24 pilot; overridable via YAML config.
   std::vector<std::string> handoverConditionNames_ = {"Tool", "Baseline", "Partner"};
-  std::vector<double> handoverSpeedScales_ = {1.5, 1.1, 0.8};
+  std::vector<double> handoverSpeedScales_ = {1.1, 1.1, 1.1};
   std::vector<double> handoverAlphas_ = {0.0, 0.5, 1.0};
   std::vector<double> handoverArmDelays_ = {3.0, 2.0, 0.2}; // [s] settle before pull detection arms
   size_t handoverCondition_ = 1; // default: Baseline

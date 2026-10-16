@@ -27,48 +27,99 @@ collisions:
   useMinimal: true
 
 # Implement some additional text states
+# NOTE (2026-07-23): 実験では BottlePick と NGPoint の2ボタンだけを使うため、
+# 既存の3移動モード(ConstantVel/TrapezoidalVel/MinimumJerk)と TestSequence は
+# GUIから隠す目的でコメントアウト。復活させたい場合は下のブロックと transitions の
+# 該当行のコメントを外すこと。
+# states:
+#   ConstantVel_FSM:
+#     base: Meta
+#     Managed: false
+#     StepByStep: true
+#     transitions:
+#       - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
+#       - [KinovaController_PrepareMovement, OK, KinovaController_ConstantVel, Auto]
+#       - [KinovaController_ConstantVel, OK, KinovaController_Initial, Strict]
+#
+#   TrapezoidalVel_FSM:
+#     base: Meta
+#     Managed: false
+#     StepByStep: true
+#     transitions:
+#       - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
+#       - [KinovaController_PrepareMovement, OK, KinovaController_TrapezoidalVel, Auto]
+#       - [KinovaController_TrapezoidalVel, OK, KinovaController_Initial, Strict]
+#
+#   MinimumJerk_FSM:
+#     base: Meta
+#     Managed: false
+#     StepByStep: true
+#     transitions:
+#       - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
+#       - [KinovaController_PrepareMovement, OK, KinovaController_MinimumJerk, Auto]
+#       - [KinovaController_MinimumJerk, OK, KinovaController_Initial, Strict]
+
+# Four bottle-pick locations in a row (2026-07-23). All reuse the single C++ state
+# KinovaController_Bottle1; only lateralOffset (+y = robot's left) differs, so the
+# grasp x, z and top-down orientation are the measured (FK) pick and the bottles
+# line up side by side. Short names (Bottle1..Bottle4) via `base:` — no
+# KinovaController_ prefix needed in the GUI.
+# Layout (2026-07-23, after the real-robot check): the whole row is slid RIGHT
+# (toward -y, the 3->4 direction) so Bottle1 clears the NG card on the left. Bottle1
+# sits at the measured pick (offset 0, leftmost, max clearance from the card) and the
+# row extends right at 0.14 m spacing to Bottle4 (rightmost). Slide the whole row by
+# adding the same amount to every lateralOffset; the resolved grasp [x, y, z] of each
+# is printed at start() (read it to refine spacing/reach — watch Bottle4's far reach).
 states:
-  ConstantVel_FSM:
-    base: Meta
-    Managed: false
-    StepByStep: true
-    transitions:
-      - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
-      - [KinovaController_PrepareMovement, OK, KinovaController_ConstantVel, Auto]
-      - [KinovaController_ConstantVel, OK, KinovaController_Initial, Strict]
-
-  TrapezoidalVel_FSM:
-    base: Meta
-    Managed: false
-    StepByStep: true
-    transitions:
-      - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
-      - [KinovaController_PrepareMovement, OK, KinovaController_TrapezoidalVel, Auto]
-      - [KinovaController_TrapezoidalVel, OK, KinovaController_Initial, Strict]
-
-  MinimumJerk_FSM:
-    base: Meta
-    Managed: false
-    StepByStep: true
-    transitions:
-      - [KinovaController_Initial, OK, KinovaController_PrepareMovement, Strict]
-      - [KinovaController_PrepareMovement, OK, KinovaController_MinimumJerk, Auto]
-      - [KinovaController_MinimumJerk, OK, KinovaController_Initial, Strict]
+  Bottle1:
+    base: KinovaController_Bottle1
+    lateralOffset: 0.09
+  Bottle2:
+    base: KinovaController_Bottle1
+    lateralOffset: -0.05
+  Bottle3:
+    base: KinovaController_Bottle1
+    lateralOffset: -0.19
+  Bottle4:
+    base: KinovaController_Bottle1
+    lateralOffset: -0.33
 
 # Transitions map
 transitions:
-- [KinovaController_Initial, ConstantVel, ConstantVel_FSM, Strict]
-- [ConstantVel_FSM, OK, KinovaController_Initial, Strict]
-- [KinovaController_Initial, TrapezoidalVel, TrapezoidalVel_FSM, Strict]
-- [TrapezoidalVel_FSM, OK, KinovaController_Initial, Strict]
-- [KinovaController_Initial, MinimumJerk, MinimumJerk_FSM, Strict]
-- [MinimumJerk_FSM, OK, KinovaController_Initial, Strict]
+# --- 既存3移動モード + TestSequence は非表示(コメントアウト。上記NOTE参照) ---
+# - [KinovaController_Initial, ConstantVel, ConstantVel_FSM, Strict]
+# - [ConstantVel_FSM, OK, KinovaController_Initial, Strict]
+# - [KinovaController_Initial, TrapezoidalVel, TrapezoidalVel_FSM, Strict]
+# - [TrapezoidalVel_FSM, OK, KinovaController_Initial, Strict]
+# - [KinovaController_Initial, MinimumJerk, MinimumJerk_FSM, Strict]
+# - [MinimumJerk_FSM, OK, KinovaController_Initial, Strict]
 # One-button demo: wrist 180deg -> gripper close -> open -> wrist back -> auto return
-- [KinovaController_Initial, TestSequence, KinovaController_TestSequence, Strict]
-- [KinovaController_TestSequence, OK, KinovaController_Initial, Auto]
+# - [KinovaController_Initial, TestSequence, KinovaController_TestSequence, Strict]
+# - [KinovaController_TestSequence, OK, KinovaController_Initial, Auto]
 # One-button bottle pick: open -> poseA -> close 43% -> poseB -> hold (OK returns home)
+# BottlePick returns home in JOINT space (folding-corrected) BEFORE emitting OK, so
+# the arm is already at the home joint config when we auto-advance to Initial: the
+# transition is Auto (no second button press), and safe (Initial's one-shot home
+# command has nothing to snap). This is NOT the forbidden "Force-Transition straight
+# to Initial from the present pose" — that skips the safe return; this happens after it.
 - [KinovaController_Initial, BottlePick, KinovaController_BottlePick, Strict]
-- [KinovaController_BottlePick, OK, KinovaController_Initial, Strict]
+- [KinovaController_BottlePick, OK, KinovaController_Initial, Auto]
+# One-button NG pointing: Bastien's card-pointing flow (jab/retract repeats),
+# restyled by the active handover condition (Tool/Baseline/Partner)
+- [KinovaController_Initial, NGPoint, KinovaController_NGPoint, Strict]
+- [KinovaController_NGPoint, OK, KinovaController_Initial, Auto]
+# One-button bottle pick, POSITION-specified (Cartesian approach/grasp/lift from FK
+# of the taught poses; present/hold/release/return reused from BottlePick). Four
+# side-by-side locations (Bottle1..Bottle4, see the states block above). Each
+# auto-returns to Initial like BottlePick (it ends at the home joint config).
+- [KinovaController_Initial, Bottle1, Bottle1, Strict]
+- [Bottle1, OK, KinovaController_Initial, Auto]
+- [KinovaController_Initial, Bottle2, Bottle2, Strict]
+- [Bottle2, OK, KinovaController_Initial, Auto]
+- [KinovaController_Initial, Bottle3, Bottle3, Strict]
+- [Bottle3, OK, KinovaController_Initial, Auto]
+- [KinovaController_Initial, Bottle4, Bottle4, Strict]
+- [Bottle4, OK, KinovaController_Initial, Auto]
 
 # Initial state
 init: KinovaController_Initial
