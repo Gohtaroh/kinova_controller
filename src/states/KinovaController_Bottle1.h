@@ -139,6 +139,7 @@ private:
 
   // --- Trajectory style (read from the active handover condition in start()) -
   double alpha_ = 1.0;
+  double durationFactor_ = 1.4375; // common move-duration factor (all conditions), from the controller in start()
   double speedScale_ = 1.0;
 
   // --- Computed pick targets (filled in start() from config or FK) ----------

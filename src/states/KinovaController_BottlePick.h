@@ -106,6 +106,7 @@ private:
   // one tempo. The active default is whatever condition the controller selects
   // (see KinovaController handoverCondition_), NOT necessarily these values.
   double alpha_ = 1.0;
+  double durationFactor_ = 1.4375; // common move-duration factor (all conditions), from the controller in start()
   double speedScale_ = 1.0;
 
   std::vector<double> startQ_;

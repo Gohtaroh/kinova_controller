@@ -17,6 +17,15 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   config("handoverSpeedScales", handoverSpeedScales_);
   config("handoverAlphas", handoverAlphas_);
   config("handoverArmDelays", handoverArmDelays_);
+  config("handoverDurationFactor", handoverDurationFactor_);
+  // > 0 or every move duration becomes zero/negative (FSM would stall or jump).
+  if(!(handoverDurationFactor_ > 0.0))
+  {
+    mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] handoverDurationFactor = {} must be > 0",
+                                                     handoverDurationFactor_);
+  }
+  mc_rtc::log::info("[KinovaController] Move duration factor {:.4f} for all conditions (1.4375 = Baseline timing)",
+                    handoverDurationFactor_);
   if(handoverSpeedScales_.size() != handoverConditionNames_.size()
      || handoverAlphas_.size() != handoverConditionNames_.size()
      || handoverArmDelays_.size() != handoverConditionNames_.size())
@@ -219,6 +228,7 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   // kinematics (speed scale, blend alpha) per condition for the manipulation check.
   logger().addLogEntry("KinovaController_HandoverAlpha", [this]() { return handoverAlpha(); });
   logger().addLogEntry("KinovaController_HandoverSpeedScale", [this]() { return handoverSpeedScale(); });
+  logger().addLogEntry("KinovaController_HandoverDurationFactor", [this]() { return handoverDurationFactor(); });
 
   mc_rtc::log::success("KinovaController init done ");
 }

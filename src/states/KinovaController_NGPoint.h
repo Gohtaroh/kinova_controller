@@ -114,6 +114,7 @@ private:
   // controller's active handover condition, so these initializers are only a
   // fallback for standalone use (same convention as BottlePick).
   double alpha_ = 1.0;
+  double durationFactor_ = 1.4375; // common move-duration factor (all conditions), from the controller in start()
   double speedScale_ = 1.0;
 
   Eigen::Vector3d target_ = Eigen::Vector3d::Zero(); // card position being pointed at

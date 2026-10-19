@@ -120,6 +120,7 @@ void KinovaController_NGPoint::start(mc_control::fsm::Controller & ctl_)
   // jab doesn't need the handover's full tempo difference (full-spread Tool shook
   // the bench; 1.0-centred compression made Partner crawl).
   alpha_ = ctl.handoverAlpha();
+  durationFactor_ = ctl.handoverDurationFactor();
   const double baseScale = ctl.handoverBaselineSpeedScale();
   speedScale_ = baseScale + (ctl.handoverSpeedScale() - baseScale) * speedScaleCompression_;
   mc_rtc::log::info("[NGPoint] Handover condition: {} (speed x{:.3f} = raw x{:.3f} compressed x{:.2f} about x{:.2f}, "
@@ -185,7 +186,8 @@ void KinovaController_NGPoint::initSegment(mc_control::fsm::Controller & ctl_,
   const double dist = (segEnd_ - segStart_).norm();
   // speed means peak velocity for every alpha: the blended profile's peak/mean
   // velocity ratio is (1 + 0.875*alpha), exactly as in BottlePick::initMove.
-  const double peakFactor = 1.0 + 0.875 * alpha_;
+  // Same duration in every condition (alpha only shapes the profile).
+  const double peakFactor = durationFactor_;
   tf_ = std::max(peakFactor * dist / (speed * speedScale_), minMoveTime_);
   t_ = 0.0;
 }

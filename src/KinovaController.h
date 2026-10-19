@@ -56,6 +56,20 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
   {
     return handoverConditionNames_[handoverCondition_];
   }
+  // Move-duration factor shared by EVERY condition (2026-10-19). Every condition-
+  // styled move takes tf = factor * distance / (speed * speedScale), independent of
+  // the condition's alpha, so all three conditions take the SAME time for the same
+  // move and differ only in the SHAPE of the velocity profile (alpha: constant
+  // velocity vs minimum jerk). This is NOT a profile parameter.
+  // Reference values: 1.0 = old Tool timing, 1.4375 = old Baseline timing
+  // (default, Baseline motion unchanged), 1.875 = old Partner timing. The peak
+  // speed of a condition is (1 + 0.875 * alpha) / factor times `speed`, i.e. with
+  // the default Tool ~0.70x and Partner ~1.30x of Baseline's peak. Set 1.875 to keep
+  // every condition's peak at or below `speed` (e.g. to stay under a speed cap).
+  double handoverDurationFactor() const
+  {
+    return handoverDurationFactor_;
+  }
   // Baseline (centre) condition speed scale, for states that compress the
   // condition spread around the centre (NGPoint) instead of using the full one.
   double handoverBaselineSpeedScale() const
@@ -100,6 +114,8 @@ private:
   std::vector<double> handoverAlphas_ = {0.0, 0.5, 1.0};
   std::vector<double> handoverArmDelays_ = {3.0, 2.0, 0.2}; // [s] settle before pull detection arms
   size_t handoverCondition_ = 1; // default: Baseline
+  // Common move-duration factor (see handoverDurationFactor()).
+  double handoverDurationFactor_ = 1.4375;
 
   Eigen::Vector3d initialEEPosition_;
   Eigen::Vector3d finalEEPosition_;

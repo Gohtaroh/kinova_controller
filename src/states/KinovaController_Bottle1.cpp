@@ -124,6 +124,7 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
 
   // Adopt the active handover condition (motion style) for the whole sequence.
   alpha_ = ctl.handoverAlpha();
+  durationFactor_ = ctl.handoverDurationFactor();
   speedScale_ = ctl.handoverSpeedScale();
   armDelay_ = ctl.handoverArmDelay();
   mc_rtc::log::info("[{}] Handover condition: {} (speed x{:.3f}, alpha {:.2f}, armDelay {:.2f}s)", name(),
@@ -227,6 +228,9 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
       runLog_.meta(fmt::format("speed_scale: {}", speedScale_));
       runLog_.meta(fmt::format("alpha: {}", alpha_));
       runLog_.meta(fmt::format("arm_delay: {}", armDelay_));
+      runLog_.meta(fmt::format("duration_factor: {} (move duration = factor * distance / (speed * speed_scale); "
+                               "same for every condition)",
+                               durationFactor_));
       runLog_.meta(fmt::format("lateral_offset: {}", lateralOffset_));
       runLog_.meta(fmt::format("approach_pt: {} {} {}", approachPt_.x(), approachPt_.y(), approachPt_.z()));
       runLog_.meta(fmt::format("grasp_pt: {} {} {}", graspPt_.x(), graspPt_.y(), graspPt_.z()));
@@ -314,7 +318,8 @@ void KinovaController_Bottle1::initSegment(mc_control::fsm::Controller & ctl_,
   segStart_ = continuous ? segEnd_ : Eigen::Vector3d(ctl.compEETask->positionTask->position());
   segEnd_ = goal;
   const double dist = (segEnd_ - segStart_).norm();
-  const double peakFactor = 1.0 + 0.875 * alpha_;
+  // Same duration in every condition (alpha only shapes the profile).
+  const double peakFactor = durationFactor_;
   tf_ = std::max(peakFactor * dist / (speed * speedScale_), minMoveTime_);
   t_ = 0.0;
 }
@@ -380,7 +385,8 @@ void KinovaController_Bottle1::initMove(mc_control::fsm::Controller & ctl_,
     targetQ_.push_back(target);
     maxDelta = std::max(maxDelta, std::abs(target - ref));
   }
-  const double peakFactor = 1.0 + 0.875 * alpha_;
+  // Same duration in every condition (alpha only shapes the profile).
+  const double peakFactor = durationFactor_;
   tf_ = std::max(peakFactor * maxDelta / (speed * speedScale_), minMoveTime_);
   t_ = 0.0;
 }

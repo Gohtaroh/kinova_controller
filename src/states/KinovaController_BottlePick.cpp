@@ -38,6 +38,7 @@ void KinovaController_BottlePick::start(mc_control::fsm::Controller & ctl_)
   // Adopt the active handover condition (motion style) for the whole sequence, so
   // the pick, lift, present and return all share one tempo and smoothness.
   alpha_ = ctl.handoverAlpha();
+  durationFactor_ = ctl.handoverDurationFactor();
   speedScale_ = ctl.handoverSpeedScale();
   // Sharper stops (alpha < 1) need a longer settle before the pull-detection baseline
   // is captured, else the arrival transient is misread as a pull (bottle self-releases).
@@ -109,7 +110,8 @@ void KinovaController_BottlePick::initMove(mc_control::fsm::Controller & ctl_,
   // velocity ratio is (1 + 0.875*alpha) (1.0 for constant velocity, 1.875 for
   // minimum jerk), so tf = ratio * distance / peak_speed keeps `speed` meaning
   // peak velocity across all alpha. speedScale_ applies the condition's tempo.
-  const double peakFactor = 1.0 + 0.875 * alpha_;
+  // Same duration in every condition (alpha only shapes the profile).
+  const double peakFactor = durationFactor_;
   tf_ = std::max(peakFactor * maxDelta / (speed * speedScale_), 0.5);
   t_ = 0.0;
 }
