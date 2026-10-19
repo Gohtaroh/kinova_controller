@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "RunLogger.h"
+
 /** One-button bottle pick, POSITION-specified (prototype, 2026-07-23).
  *
  *  Same behaviour as KinovaController_BottlePick — approach above the bottle,
@@ -25,6 +27,14 @@
  *  proven pull-detection and safe return are reused verbatim. The EE task is
  *  dropped at the lift->present handoff, so the arm ends at the home joint
  *  configuration and Initial has nothing to snap (auto-return is safe).
+ *
+ *  Per-run CSV (2026-10, early-release study): every execution writes ONE file
+ *  <runLogDir>/<YYYYMMDD_HHMMSS>_<StateName>_<Condition>.csv holding, at the
+ *  control rate, the joint state, measured and external-estimate torques of
+ *  all 7 joints, end-effector position/velocity, the distance left to the
+ *  present pose, and the pull-detection internals, in EVERY phase. Metadata
+ *  (condition, parameters, resolved pick points) and events (phase changes,
+ *  detection) are '#' header lines. See RunLogger.h.
  */
 struct KinovaController_Bottle1 : mc_control::fsm::State
 {
@@ -102,6 +112,30 @@ private:
   double gripperSettle_ = 0.5;
   double convergenceGrace_ = 3.0;
   double minMoveTime_ = 0.5; // [s] lower clamp on any segment duration
+  // Simulation aid: if > 0, release automatically after this many seconds of
+  // HOLDING (there is no one to pull in MuJoCo / the ticker). 0 = disabled,
+  // which is what the real robot must run with.
+  double autoReleaseAfter_ = 0.0;
+
+  // --- Per-run CSV log --------------------------------------------------------
+  bool runLogEnabled_ = true;
+  std::string runLogDir_; // default: $HOME/workspace/logs/runs (set in configure)
+  int runLogDecimation_ = 1; // 1 = every control tick
+  double runLogReserveSec_ = 120.0; // buffer preallocation (longer runs still work, with one realloc)
+  RunLogger runLog_;
+  std::vector<double> rowBuf_;
+  std::vector<int> refTorqueIdx_; // per arm joint: index into realRobot().jointTorques(), or -1
+  std::vector<int> jointIdx_; // per arm joint: mb joint index
+  std::vector<int> dofIdx_; // per arm joint: DoF index (external-torque vector)
+  Eigen::VectorXd tauExt_ = Eigen::VectorXd::Zero(0); // this tick's full estimate (all DoFs)
+  double runTime_ = 0.0; // [s] since start()
+  int tick_ = 0;
+  int releaseTrigger_ = 0; // 0 none, 1 pull (delta/abs), 2 early pull, 3 manual button, 4 auto (sim)
+  double segProgress_ = 0.0; // t/tf of the current segment, clamped to [0, 1]
+  /** Record a line in the mc_rtc terminal log AND as a run-log event. */
+  void note(const std::string & text);
+  /** Append this tick's sample row to the run log. */
+  void logRow(mc_control::fsm::Controller & ctl);
 
   // --- Trajectory style (read from the active handover condition in start()) -
   double alpha_ = 1.0;

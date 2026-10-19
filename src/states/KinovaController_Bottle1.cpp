@@ -10,7 +10,10 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
 #include <map>
 
 static const std::vector<std::string> jointNames = {"joint_1", "joint_2", "joint_3", "joint_4",
@@ -44,6 +47,20 @@ void KinovaController_Bottle1::configure(const mc_rtc::Configuration & config)
   config("gripperSettle", gripperSettle_);
   config("convergenceGrace", convergenceGrace_);
   config("minMoveTime", minMoveTime_);
+  config("autoReleaseAfter", autoReleaseAfter_);
+  // Per-run CSV log (see header). Default directory: $HOME/workspace/logs/runs
+  const char * home = std::getenv("HOME");
+  runLogDir_ = std::string(home ? home : "/tmp") + "/workspace/logs/runs";
+  config("runLogEnabled", runLogEnabled_);
+  config("runLogDir", runLogDir_);
+  config("runLogDecimation", runLogDecimation_);
+  config("runLogReserveSec", runLogReserveSec_);
+}
+
+void KinovaController_Bottle1::note(const std::string & text)
+{
+  mc_rtc::log::info("[{}] {}", name(), text);
+  runLog_.event(runTime_, text);
 }
 
 sva::PTransformd KinovaController_Bottle1::poseFK(mc_control::fsm::Controller & ctl_,
@@ -109,7 +126,7 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
   alpha_ = ctl.handoverAlpha();
   speedScale_ = ctl.handoverSpeedScale();
   armDelay_ = ctl.handoverArmDelay();
-  mc_rtc::log::info("[Bottle1] Handover condition: {} (speed x{:.3f}, alpha {:.2f}, armDelay {:.2f}s)",
+  mc_rtc::log::info("[{}] Handover condition: {} (speed x{:.3f}, alpha {:.2f}, armDelay {:.2f}s)", name(),
                     ctl.handoverConditionName(), speedScale_, alpha_, armDelay_);
 
   // Measure the pick from the taught poses via forward kinematics; config
@@ -132,10 +149,107 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
   // diagnostic logged in every phase. poseB is joint-space and common to all
   // bottles, so this is the same point regardless of lateralOffset.
   presentEEPos_ = poseFK(ctl_, poseBDeg_).translation();
-  mc_rtc::log::info("[Bottle1] approach [{:.3f}, {:.3f}, {:.3f}] grasp [{:.3f}, {:.3f}, {:.3f}] lift [{:.3f}, {:.3f}, "
+  mc_rtc::log::info("[{}] approach [{:.3f}, {:.3f}, {:.3f}] grasp [{:.3f}, {:.3f}, {:.3f}] lift [{:.3f}, {:.3f}, "
                     "{:.3f}] (m)",
-                    approachPt_.x(), approachPt_.y(), approachPt_.z(), graspPt_.x(), graspPt_.y(), graspPt_.z(),
+                    name(), approachPt_.x(), approachPt_.y(), approachPt_.z(), graspPt_.x(), graspPt_.y(), graspPt_.z(),
                     liftPt_.x(), liftPt_.y(), liftPt_.z());
+
+  // --- Per-run CSV log: one file per execution of this state --------------------
+  runTime_ = 0.0;
+  tick_ = 0;
+  releaseTrigger_ = 0;
+  segProgress_ = 0.0;
+  jointIdx_.clear();
+  dofIdx_.clear();
+  refTorqueIdx_.clear();
+  const auto & rjo = ctl.robot().refJointOrder();
+  for(const auto & jn : jointNames)
+  {
+    jointIdx_.push_back(ctl.robot().jointIndexByName(jn));
+    dofIdx_.push_back(ctl.robot().mb().jointPosInDof(jointIdx_.back()));
+    auto it = std::find(rjo.begin(), rjo.end(), jn);
+    refTorqueIdx_.push_back(it == rjo.end() ? -1 : static_cast<int>(it - rjo.begin()));
+  }
+  if(runLogEnabled_)
+  {
+    std::vector<std::string> cols = {"t", "phase"};
+    auto addJointCols = [&cols](const std::string & prefix)
+    {
+      for(size_t i = 1; i <= jointNames.size(); ++i)
+      {
+        cols.push_back(prefix + std::to_string(i));
+      }
+    };
+    addJointCols("q_"); // measured joint angle [rad] (realRobot / encoders)
+    addJointCols("qd_"); // measured joint velocity [rad/s]
+    addJointCols("q_cmd_"); // commanded joint angle [rad] (control robot)
+    addJointCols("tau_meas_"); // measured joint torque [Nm] (realRobot().jointTorques())
+    addJointCols("tau_ext_"); // external-torque estimate [Nm] (ExternalForcesEstimator)
+    for(const char * c : {"ee_x",
+                          "ee_y",
+                          "ee_z",
+                          "ee_vx",
+                          "ee_vy",
+                          "ee_vz",
+                          "ee_cmd_x",
+                          "ee_cmd_y",
+                          "ee_cmd_z",
+                          "ee_ref_x",
+                          "ee_ref_y",
+                          "ee_ref_z",
+                          "dist_to_present",
+                          "seg_progress",
+                          "hold_timer",
+                          "baseline_captured",
+                          "d2",
+                          "d4",
+                          "debounce_timer",
+                          "early_debounce_timer",
+                          "gripper_opening",
+                          "release_trigger"})
+    {
+      cols.push_back(c);
+    }
+    const int decim = std::max(runLogDecimation_, 1);
+    const size_t reserveRows = static_cast<size_t>(std::max(runLogReserveSec_, 1.0) / (ctl.timeStep * decim)) + 1;
+    if(runLog_.begin(runLogDir_, name() + "_" + ctl.handoverConditionName(), cols, reserveRows))
+    {
+      const std::time_t now = std::time(nullptr);
+      char when[32];
+      std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+      runLog_.meta(fmt::format("state: {}", name()));
+      runLog_.meta(fmt::format("started: {}", when));
+      runLog_.meta(fmt::format("robot: {}", ctl.robot().name()));
+      runLog_.meta(fmt::format("timestep: {}", ctl.timeStep));
+      runLog_.meta(fmt::format("decimation: {}", decim));
+      runLog_.meta(fmt::format("session_log: {}", ctl.logger().path()));
+      runLog_.meta(fmt::format("condition: {}", ctl.handoverConditionName()));
+      runLog_.meta(fmt::format("speed_scale: {}", speedScale_));
+      runLog_.meta(fmt::format("alpha: {}", alpha_));
+      runLog_.meta(fmt::format("arm_delay: {}", armDelay_));
+      runLog_.meta(fmt::format("lateral_offset: {}", lateralOffset_));
+      runLog_.meta(fmt::format("approach_pt: {} {} {}", approachPt_.x(), approachPt_.y(), approachPt_.z()));
+      runLog_.meta(fmt::format("grasp_pt: {} {} {}", graspPt_.x(), graspPt_.y(), graspPt_.z()));
+      runLog_.meta(fmt::format("lift_pt: {} {} {}", liftPt_.x(), liftPt_.y(), liftPt_.z()));
+      runLog_.meta(fmt::format("present_ee: {} {} {}", presentEEPos_.x(), presentEEPos_.y(), presentEEPos_.z()));
+      runLog_.meta(fmt::format("speeds: approach {} grasp {} lift {} (m/s) present {} return {} (rad/s)",
+                               approachSpeed_, graspSpeed_, liftSpeed_, presentSpeed_, returnSpeed_));
+      runLog_.meta(fmt::format("gripper_closed_pct: {}", gripperClosedPct_));
+      runLog_.meta(fmt::format("pull_thresholds: d4>{} |d2|>{} abs4>{} |abs2|>{} early4>{} |early2|>{} "
+                               "debounce {} early_debounce {}",
+                               pullJoint4Thresh_, pullJoint2Thresh_, pullJoint4Abs_, pullJoint2Abs_,
+                               earlyPullJoint4Abs_, earlyPullJoint2Abs_, debounceTime_, earlyDebounceTime_));
+      runLog_.meta(fmt::format("auto_release_after: {}", autoReleaseAfter_));
+      runLog_.meta("phases: 0 MOVE_TO_APPROACH, 1 MOVE_TO_GRASP, 2 CLOSE_GRIPPER, 3 MOVE_TO_LIFTUP, "
+                   "4 MOVE_TO_PRESENT, 5 HOLDING, 6 RELEASING, 7 RETURN_TO_HOME, 8 DONE");
+      runLog_.meta("release_trigger: 0 none, 1 pull (delta/abs), 2 early pull, 3 manual button, 4 auto (sim)");
+      runLog_.meta("units: q/q_cmd rad, qd rad/s, tau Nm, ee m and m/s, timers s; q/qd/tau_meas/ee from "
+                   "realRobot (encoders), q_cmd/ee_cmd from the control robot, ee_ref = EE task reference "
+                   "(meaningful in Cartesian phases 0-3 only), events/meta lines start with '#'");
+      rowBuf_.reserve(cols.size());
+      mc_rtc::log::info("[{}] Run log -> {}", name(), runLog_.path());
+    }
+  }
 
   // Open the gripper before the pick (as BottlePick does).
   ctl.robot().gripper("gripper").setTargetOpening(1.0);
@@ -186,7 +300,7 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
 
   initSegment(ctl_, approachPt_, approachSpeed_, /*continuous=*/false);
   phase_ = MOVE_TO_APPROACH;
-  mc_rtc::log::info("[Bottle1] Moving to approach point ({:.1f} s)", tf_);
+  note(fmt::format("Moving to approach point ({:.1f} s)", tf_));
 }
 
 // --- Cartesian segment (EE task, blended s_alpha; same as NGPoint) -----------
@@ -316,11 +430,15 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
   // these samples below instead of reading the datastore a second time.
   if(forceDetectAvailable_)
   {
-    const Eigen::VectorXd tauExt = ctl.datastore().call<Eigen::VectorXd>("EF_Estimator::getExternalTorques");
-    lastTau2_ = tauExt[dofJoint2_];
-    lastTau4_ = tauExt[dofJoint4_];
+    tauExt_ = ctl.datastore().call<Eigen::VectorXd>("EF_Estimator::getExternalTorques");
+    lastTau2_ = tauExt_[dofJoint2_];
+    lastTau4_ = tauExt_[dofJoint4_];
   }
-  lastDistToPresent_ = (ctl.robot().bodyPosW("end_effector_link").translation() - presentEEPos_).norm();
+  // Physical (encoder-based) EE distance to the present pose.
+  lastDistToPresent_ = (ctl.realRobot().bodyPosW("end_effector_link").translation() - presentEEPos_).norm();
+  runTime_ += ctl.timeStep;
+  segProgress_ = (tf_ > 0.0) ? std::min(t_ / tf_, 1.0) : 0.0;
+  releaseTrigger_ = 0;
   switch(phase_)
   {
     case MOVE_TO_APPROACH:
@@ -329,14 +447,14 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
       {
         initSegment(ctl_, graspPt_, graspSpeed_, /*continuous=*/true);
         phase_ = MOVE_TO_GRASP;
-        mc_rtc::log::info("[Bottle1] Descending to grasp point ({:.1f} s)", tf_);
+        note(fmt::format("Descending to grasp point ({:.1f} s)", tf_));
       }
       break;
     case MOVE_TO_GRASP:
       // Grasp must be accurate: wait for convergence before closing.
       if(segmentDone(ctl_, /*requireConvergence=*/true))
       {
-        mc_rtc::log::info("[Bottle1] Grasp point reached, closing gripper to {:.0f}%", gripperClosedPct_);
+        note(fmt::format("Grasp point reached, closing gripper to {:.0f}%", gripperClosedPct_));
         ctl.robot().gripper("gripper").setTargetOpening(1.0 - gripperClosedPct_ / 100.0);
         timer_ = 0.0;
         phase_ = CLOSE_GRIPPER;
@@ -349,11 +467,11 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
       {
         if(timer_ > 4.0)
         {
-          mc_rtc::log::warning("[Bottle1] Gripper close did not report completion, continuing anyway");
+          mc_rtc::log::warning("[{}] Gripper close did not report completion, continuing anyway", name());
         }
         initSegment(ctl_, liftPt_, liftSpeed_, /*continuous=*/true);
         phase_ = MOVE_TO_LIFTUP;
-        mc_rtc::log::info("[Bottle1] Gripper closed, lifting straight up ({:.1f} s)", tf_);
+        note(fmt::format("Gripper closed, lifting straight up ({:.1f} s)", tf_));
       }
       break;
     case MOVE_TO_LIFTUP:
@@ -366,14 +484,13 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         ctl.solver().removeTask(ctl.compEETask);
         initMove(ctl_, poseBDeg_, presentSpeed_, /*continuous=*/false);
         phase_ = MOVE_TO_PRESENT;
-        mc_rtc::log::info("[Bottle1] Lifted, moving to present pose ({:.1f} s)", tf_);
+        note(fmt::format("Lifted, moving to present pose ({:.1f} s)", tf_));
       }
       break;
     case MOVE_TO_PRESENT:
       if(moveDone(ctl_, /*requireConvergence=*/true))
       {
-        mc_rtc::log::info("[Bottle1] Present pose reached, holding. Pull the bottle to release, "
-                          "or press \"Return home (safe)\".");
+        note("Present pose reached, holding. Pull the bottle to release, or press \"Return home (safe)\".");
         holdTimer_ = 0.0;
         debounceTimer_ = 0.0;
         earlyDebounceTimer_ = 0.0;
@@ -385,6 +502,17 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
     {
       holdTimer_ += ctl.timeStep;
       bool release = returnRequested_;
+      if(release)
+      {
+        releaseTrigger_ = 3;
+        note("Manual release requested (button)");
+      }
+      else if(autoReleaseAfter_ > 0.0 && holdTimer_ > autoReleaseAfter_)
+      {
+        release = true;
+        releaseTrigger_ = 4;
+        note(fmt::format("Auto release after {:.2f} s of holding (simulation aid)", holdTimer_));
+      }
       if(!release && forceDetectAvailable_)
       {
         // Reuse this tick's samples taken at the top of run().
@@ -401,8 +529,8 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
             baselineCaptured_ = true;
             lastD2_ = 0.0;
             lastD4_ = 0.0;
-            mc_rtc::log::info("[Bottle1] Detection armed, baseline joint_2={:.2f} joint_4={:.2f}", baselineJoint2_,
-                              baselineJoint4_);
+            note(fmt::format("Detection armed, baseline joint_2={:.2f} joint_4={:.2f}", baselineJoint2_,
+                             baselineJoint4_));
           }
           else
           {
@@ -420,10 +548,11 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         if(debounceTimer_ > debounceTime_ || earlyDebounceTimer_ > earlyDebounceTime_)
         {
           bool viaEarly = !(debounceTimer_ > debounceTime_);
-          mc_rtc::log::info("[Bottle1] Pull detected (d_joint_2={:.2f}, d_joint_4={:.2f}, "
-                            "abs_joint_2={:.2f}, abs_joint_4={:.2f}, early={}), releasing",
-                            lastD2_, lastD4_, t2, t4, viaEarly);
+          note(fmt::format("Pull detected (d_joint_2={:.2f}, d_joint_4={:.2f}, abs_joint_2={:.2f}, "
+                           "abs_joint_4={:.2f}, early={}), releasing",
+                           lastD2_, lastD4_, t2, t4, viaEarly));
           release = true;
+          releaseTrigger_ = viaEarly ? 2 : 1;
         }
       }
       if(release)
@@ -444,22 +573,84 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
           homeDeg.push_back(ctl.postureHome.at(jn)[0] * 180.0 / mc_rtc::constants::PI);
         }
         initMove(ctl_, homeDeg, returnSpeed_, /*continuous=*/true);
-        mc_rtc::log::info("[Bottle1] Bottle released, moving straight to home ({:.1f} s)", tf_);
+        note(fmt::format("Bottle released, moving straight to home ({:.1f} s)", tf_));
         phase_ = RETURN_TO_HOME;
       }
       break;
     case RETURN_TO_HOME:
       if(moveDone(ctl_, /*requireConvergence=*/true))
       {
-        mc_rtc::log::info("[Bottle1] Returned home safely.");
+        note("Returned home safely.");
         phase_ = DONE;
       }
       break;
     case DONE:
+      logRow(ctl_);
       output("OK");
       return true;
   }
+  logRow(ctl_);
   return false;
+}
+
+void KinovaController_Bottle1::logRow(mc_control::fsm::Controller & ctl_)
+{
+  if(!runLog_.active())
+  {
+    return;
+  }
+  if((tick_++ % std::max(runLogDecimation_, 1)) != 0)
+  {
+    return;
+  }
+  auto & ctl = static_cast<KinovaController &>(ctl_);
+  const auto & real = ctl.realRobot();
+  const auto & cmd = ctl.robot();
+  const auto & tauMeas = real.jointTorques();
+  rowBuf_.clear();
+  rowBuf_.push_back(runTime_);
+  rowBuf_.push_back(static_cast<double>(phase_));
+  for(int j : jointIdx_)
+  {
+    rowBuf_.push_back(real.mbc().q[j][0]);
+  }
+  for(int j : jointIdx_)
+  {
+    rowBuf_.push_back(real.mbc().alpha[j][0]);
+  }
+  for(int j : jointIdx_)
+  {
+    rowBuf_.push_back(cmd.mbc().q[j][0]);
+  }
+  for(int r : refTorqueIdx_)
+  {
+    rowBuf_.push_back((r >= 0 && static_cast<size_t>(r) < tauMeas.size()) ? tauMeas[r] : 0.0);
+  }
+  for(int d : dofIdx_)
+  {
+    rowBuf_.push_back(d < tauExt_.size() ? tauExt_[d] : 0.0);
+  }
+  const Eigen::Vector3d eePos = real.bodyPosW("end_effector_link").translation();
+  const Eigen::Vector3d eeVel = real.bodyVelW("end_effector_link").linear();
+  const Eigen::Vector3d eeCmd = cmd.bodyPosW("end_effector_link").translation();
+  const Eigen::Vector3d eeRef = ctl.compEETask->positionTask->position();
+  for(const Eigen::Vector3d * v : {&eePos, &eeVel, &eeCmd, &eeRef})
+  {
+    rowBuf_.push_back(v->x());
+    rowBuf_.push_back(v->y());
+    rowBuf_.push_back(v->z());
+  }
+  rowBuf_.push_back(lastDistToPresent_);
+  rowBuf_.push_back(segProgress_);
+  rowBuf_.push_back(phase_ == HOLDING ? holdTimer_ : 0.0);
+  rowBuf_.push_back(baselineCaptured_ ? 1.0 : 0.0);
+  rowBuf_.push_back(lastD2_);
+  rowBuf_.push_back(lastD4_);
+  rowBuf_.push_back(debounceTimer_);
+  rowBuf_.push_back(earlyDebounceTimer_);
+  rowBuf_.push_back(cmd.gripper("gripper").opening());
+  rowBuf_.push_back(static_cast<double>(releaseTrigger_));
+  runLog_.row(rowBuf_);
 }
 
 void KinovaController_Bottle1::teardown(mc_control::fsm::Controller & ctl_)
@@ -475,6 +666,13 @@ void KinovaController_Bottle1::teardown(mc_control::fsm::Controller & ctl_)
   ctl.logger().removeLogEntry("Bottle1_d4");
   ctl.logger().removeLogEntry("Bottle1_phase");
   ctl.logger().removeLogEntry("Bottle1_eeDistToPresent");
+  // Hand the buffered run to the background writer (no disk I/O on this thread).
+  if(runLog_.active())
+  {
+    mc_rtc::log::info("[{}] Run finished after {:.2f} s, {} samples -> {}", name(), runTime_, runLog_.rows(),
+                      runLog_.path());
+    runLog_.finish();
+  }
 }
 
 EXPORT_SINGLE_STATE("KinovaController_Bottle1", KinovaController_Bottle1)
