@@ -63,19 +63,19 @@ private:
   double startDistance_ = 0.5; // [m] first waypoint distance from the card
   double pointDistance_ = 0.05; // [m] closest distance to the card
   double retractDistance_ = 0.15; // [m] pull-back distance between jabs
-  int maxRepeats_ = 3; // extra jabs after the first one (total jabs = 1 + maxRepeats)
+  int maxRepeats_ = 1; // extra jabs after the first one (total jabs = 1 + maxRepeats): 2 jabs (2026-10-19)
   // Peak Cartesian speeds [m/s], before the condition speed scale is applied.
   // The positioning moves (prep/start/retract/return) were raised from
   // Bastien's originals (0.05-0.1) after MuJoCo trials: at those values the
   // Partner condition (x0.8, alpha 1) dragged the gesture out too long for an
   // NG cue. They stay well below the verified 0.4 m/s jab band.
-  double prepSpeed_ = 0.10; // entry move to the EE home position
-  double startSpeed_ = 0.10; // home -> start waypoint
+  double prepSpeed_ = 0.10; // unused since 2026-10-19 (entry goes straight to the retract point); kept for old YAML
+  double startSpeed_ = 0.18; // home -> retract point, straight (shortest) path; raised 2026-10-19
   // Jab speed, lowered twice: 0.4 m/s verified band -> 0.2 (MuJoCo, Tool looked
   // aggressive) -> 0.14 (2026-07-23 real robot: Tool's abrupt jabs shook the
   // bottle bench, so the whole gesture was slowed down further on request).
-  double approachSpeed_ = 0.14; // jab towards the card
-  double retractSpeed_ = 0.09; // pull back from the card (kept slower than the jab)
+  double approachSpeed_ = 0.16; // jab towards the card; raised 2026-10-19
+  double retractSpeed_ = 0.12; // pull back from the card (kept slower than the jab); raised 2026-10-19
   // Compression of the condition speed spread, applied around the BASELINE
   // (centre) scale: scale' = base + (scale - base) * compression. The centre
   // condition's tempo is untouched; Tool gets slower and Partner faster as the
@@ -92,7 +92,7 @@ private:
   // snaps to postureHome, tripping the e-stop (observed 2026-07-23, Baseline). It
   // always uses a gentle minimum-jerk profile, independent of the condition (the
   // return is not part of the NG cue), so it is smooth and slow across all three.
-  double returnJointSpeed_ = 0.5; // [rad/s] peak joint velocity for the joint-space home return
+  double returnJointSpeed_ = 0.65; // [rad/s] peak joint velocity for the joint-space home return (= Bottle1)
   // Lower clamp on segment duration: only a guard against near-zero segments.
   // It must stay below the 0.10 m jab duration of the FASTEST condition
   // (~0.33 s at the current speeds), otherwise the clamp flattens (and can

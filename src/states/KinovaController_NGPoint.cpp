@@ -153,23 +153,18 @@ void KinovaController_NGPoint::start(mc_control::fsm::Controller & ctl_)
   ctl.compPostureTask->target(ctl.postureHome);
 
   jabsDone_ = 0;
-  // Close the gripper into a pointing fist before moving. The EE task was just
-  // reset() to the current pose, so the arm holds still while the gripper
-  // closes; the entry move is started once CLOSE_GRIPPER completes. Skipped
-  // (old open-hand pointing) when closeGripper_ is false or no gripper exists.
+  // 2026-10-19 (user request: faster, fewer jabs): close the pointing fist
+  // WHILE moving (no standing wait), and go straight from the current (home)
+  // pose to the retract point in front of the card — the shortest path —
+  // instead of home -> far start waypoint (startDistance) -> long first jab.
   if(closeGripper_ && ctl.robot().hasGripper("gripper"))
   {
     ctl.robot().gripper("gripper").setTargetOpening(gripperPointOpening_);
-    timer_ = 0.0;
-    phase_ = CLOSE_GRIPPER;
-    mc_rtc::log::info("[NGPoint] Closing gripper to {:.0f}% before pointing", (1.0 - gripperPointOpening_) * 100.0);
+    mc_rtc::log::info("[NGPoint] Closing gripper to {:.0f}% while moving", (1.0 - gripperPointOpening_) * 100.0);
   }
-  else
-  {
-    initSegment(ctl_, ctl.homePosition, prepSpeed_, /*continuous=*/false);
-    phase_ = MOVE_TO_HOME;
-    mc_rtc::log::info("[NGPoint] Moving to EE home position ({:.1f} s)", tf_);
-  }
+  initSegment(ctl_, cardOffset(ctl_, retractDistance_), startSpeed_, /*continuous=*/false);
+  phase_ = MOVE_TO_START;
+  mc_rtc::log::info("[NGPoint] Moving straight to the pointing position ({:.1f} s)", tf_);
 }
 
 void KinovaController_NGPoint::initSegment(mc_control::fsm::Controller & ctl_,
@@ -395,6 +390,10 @@ bool KinovaController_NGPoint::run(mc_control::fsm::Controller & ctl_)
             homeDeg.push_back(ctl.postureHome.at(jn)[0] * 180.0 / mc_rtc::constants::PI);
           }
           initJointMove(ctl_, homeDeg, returnJointSpeed_);
+          if(closeGripper_ && ctl.robot().hasGripper("gripper"))
+          {
+            ctl.robot().gripper("gripper").setTargetOpening(1.0); // reopen while returning (no standing wait)
+          }
           phase_ = RETURN_TO_HOME;
           mc_rtc::log::info("[NGPoint] Gesture done, returning to home joint configuration ({:.1f} s)", tf_);
         }
@@ -411,19 +410,8 @@ bool KinovaController_NGPoint::run(mc_control::fsm::Controller & ctl_)
       if(jointMoveDone(ctl_, /*requireConvergence=*/true))
       {
         mc_rtc::log::info("[NGPoint] Returned to home joint configuration.");
-        // Reopen the gripper (leaving it open for the next BottlePick, which
-        // starts by opening anyway). Only if we closed it in the first place.
-        if(closeGripper_ && ctl.robot().hasGripper("gripper"))
-        {
-          ctl.robot().gripper("gripper").setTargetOpening(1.0);
-          timer_ = 0.0;
-          phase_ = OPEN_GRIPPER;
-          mc_rtc::log::info("[NGPoint] Reopening gripper");
-        }
-        else
-        {
-          phase_ = DONE;
-        }
+        // The gripper was already told to reopen at the start of the return.
+        phase_ = DONE;
       }
       break;
     case OPEN_GRIPPER:
