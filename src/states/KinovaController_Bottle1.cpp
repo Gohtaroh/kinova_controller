@@ -49,6 +49,7 @@ void KinovaController_Bottle1::configure(const mc_rtc::Configuration & config)
   config("pullMaWindow", pullMaWindow_);
   config("pullMaThresh", pullMaThresh_);
   config("pullMaDebounce", pullMaDebounce_);
+  config("pullMaArmDelay", pullMaArmDelay_);
   config("gripperSettle", gripperSettle_);
   config("convergenceGrace", convergenceGrace_);
   config("minMoveTime", minMoveTime_);
@@ -277,8 +278,9 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
                    "4 MOVE_TO_PRESENT, 5 HOLDING, 6 RELEASING, 7 RETURN_TO_HOME, 8 DONE");
       runLog_.meta("release_trigger: 0 none, 1 pull (delta/abs), 2 early pull, 3 manual button, 4 auto (sim), "
                    "5 pull (moving average)");
-      runLog_.meta(fmt::format("pull_ma: window {} s, threshold {} Nm on MA(tau2 - tau4) - baseline, debounce {} s",
-                               pullMaWindow_, pullMaThresh_, pullMaDebounce_));
+      runLog_.meta(fmt::format("pull_ma: window {} s, threshold {} Nm on MA(tau2 - tau4) - baseline, debounce {} s, "
+                               "armed {} s + {} s baseline after the stop (independent of arm_delay)",
+                               pullMaWindow_, pullMaThresh_, pullMaDebounce_, pullMaArmDelay_, baselineWindow_));
       runLog_.meta("units: q/q_cmd rad, qd rad/s, tau Nm, ee m and m/s, timers s; q/qd/tau_meas/ee from "
                    "realRobot (encoders), q_cmd/ee_cmd from the control robot, ee_ref = EE task reference "
                    "(meaningful in Cartesian phases 0-3 only), events/meta lines start with '#'");
@@ -539,6 +541,10 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         maSum_ = 0.0;
         lastMa_ = 0.0;
         maDebounceTimer_ = 0.0;
+        maBaseSum_ = 0.0;
+        maBaseN_ = 0;
+        maBaseline_ = 0.0;
+        maArmed_ = false;
         baselineN_ = 0;
         baselineTimer_ = 0.0;
         phase_ = HOLDING;
@@ -583,6 +589,26 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
           maIdx_ = (maIdx_ + 1) % maBuf_.size();
         }
         const double ma = maSum_ / static_cast<double>(maCount_);
+        // Moving-average path: its own early baseline and arming.
+        if(holdTimer_ > pullMaArmDelay_)
+        {
+          if(!maArmed_)
+          {
+            maBaseSum_ += t2 - t4;
+            ++maBaseN_;
+            if(holdTimer_ >= pullMaArmDelay_ + baselineWindow_)
+            {
+              maBaseline_ = maBaseSum_ / maBaseN_;
+              maArmed_ = true;
+              note(fmt::format("Moving-average pull detection armed, baseline (tau2-tau4)={:.2f}", maBaseline_));
+            }
+          }
+          else
+          {
+            lastMa_ = ma - maBaseline_;
+            maOver = lastMa_ > pullMaThresh_;
+          }
+        }
         if(holdTimer_ > armDelay_)
         {
           if(!baselineCaptured_)
@@ -613,8 +639,6 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
             bool deltaOver = (d4 > pullJoint4Thresh_) || (d2 > pullJoint2Thresh_) || (d2 < -pullJoint2Thresh_);
             bool absOver = (t4 > pullJoint4Abs_) || (t2 > pullJoint2Abs_) || (t2 < -pullJoint2Abs_);
             over = deltaOver || absOver;
-            lastMa_ = ma - (baselineJoint2_ - baselineJoint4_);
-            maOver = lastMa_ > pullMaThresh_;
           }
         }
         debounceTimer_ = over ? debounceTimer_ + ctl.timeStep : 0.0;

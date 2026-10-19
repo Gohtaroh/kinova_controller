@@ -193,6 +193,17 @@ private:
   double maSum_ = 0.0;
   double lastMa_ = 0.0; // MA(tau2 - tau4) - baseline, logged
   double maDebounceTimer_ = 0.0;
+  // The moving-average path is armed soon after the stop, independent of the
+  // per-condition armDelay (which protects the ringing-sensitive delta path):
+  // its own baseline is the mean of (tau2 - tau4) over baselineWindow_ starting
+  // pullMaArmDelay_ after the stop. Replay of the 20 runs of 2026-10-19: no
+  // release before the pull; Tool pulls 1-2.6 s after the stop released in
+  // ~0.15 s instead of ~1 s.
+  double pullMaArmDelay_ = 0.2; // [s]
+  double maBaseSum_ = 0.0;
+  int maBaseN_ = 0;
+  double maBaseline_ = 0.0;
+  bool maArmed_ = false;
   double baselineJoint2_ = 0.0;
   double baselineJoint4_ = 0.0;
   double lastTau2_ = 0.0;
