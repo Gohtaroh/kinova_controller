@@ -232,13 +232,8 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                                    reservedLabel_ = label;
                                    return;
                                  }
-                                 if(isBottle && voiceTriggerEnabled_)
-                                 {
-                                   mc_rtc::log::warning("[Voice] '{}' ignored: no voice countdown running (wait for "
-                                                        "the participant's request, or press \"Simulate voice\")",
-                                                        label);
-                                   return;
-                                 }
+                                 // Outside a countdown a bottle button starts the pick at once (fallback
+                                 // when the voice was missed; user decision 2026-10-19).
                                  if(executor_.state() == "KinovaController_Initial")
                                  {
                                    executor_.resume(target);
