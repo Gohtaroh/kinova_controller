@@ -3,6 +3,7 @@
 #include <mc_rtc/gui/Button.h>
 #include <mc_rtc/gui/ComboInput.h>
 #include <mc_rtc/gui/Label.h>
+#include <mc_rtc/gui/NumberInput.h>
 #include <mc_rtc/logging.h>
 
 #include <arpa/inet.h>
@@ -203,11 +204,41 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
     bottleLabels = {"1（サラダ油）", "2（酢）", "3（醤油マヨケチャップ）", "4（グラニュー糖白すりごま）"};
   }
   std::string ngLabel = config("ngButtonLabel", (std::string) "NG 指差し");
+  config("voiceTriggerEnabled", voiceTriggerEnabled_);
+  config("voiceStartDelay", voiceStartDelay_);
+  config("voicePort", voicePort_);
+  if(!(voiceStartDelay_ > 0.0))
+  {
+    mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] voiceStartDelay must be > 0 (got {})",
+                                                     voiceStartDelay_);
+  }
   auto pickButton = [this](const std::string & label, const std::string & target)
   {
     return mc_rtc::gui::Button(label,
-                               [this, target]()
+                               [this, target, label]()
                                {
+                                 const bool isBottle = target.rfind("Bottle", 0) == 0;
+                                 if(isBottle && voiceTriggerEnabled_ && countdownActive_)
+                                 {
+                                   if(!reservedTarget_.empty() && reservedTarget_ != target)
+                                   {
+                                     mc_rtc::log::info("[Voice] Reservation changed: {} -> {}", reservedLabel_, label);
+                                   }
+                                   else
+                                   {
+                                     mc_rtc::log::info("[Voice] Reserved: {}", label);
+                                   }
+                                   reservedTarget_ = target;
+                                   reservedLabel_ = label;
+                                   return;
+                                 }
+                                 if(isBottle && voiceTriggerEnabled_)
+                                 {
+                                   mc_rtc::log::warning("[Voice] '{}' ignored: no voice countdown running (wait for "
+                                                        "the participant's request, or press \"Simulate voice\")",
+                                                        label);
+                                   return;
+                                 }
                                  if(executor_.state() == "KinovaController_Initial")
                                  {
                                    executor_.resume(target);
@@ -226,9 +257,78 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                     pickButton(ngLabel, "KinovaController_NGPoint"), pickButton(bottleLabels[0], "Bottle1"),
                     pickButton(bottleLabels[1], "Bottle2"), pickButton(bottleLabels[2], "Bottle3"),
                     pickButton(bottleLabels[3], "Bottle4"));
+  // Voice countdown status and controls, right under the pick buttons.
+  gui()->addElement({"KinovaController", "Bottle picks"},
+                    mc_rtc::gui::Label("Voice",
+                                       [this]() -> std::string
+                                       {
+                                         if(!voiceTriggerEnabled_)
+                                         {
+                                           return "OFF (bottle buttons start immediately)";
+                                         }
+                                         const bool alive = steadyNow() - voiceLastAlive_ < 2.0;
+                                         if(countdownActive_)
+                                         {
+                                           const double left =
+                                               std::max(0.0, voiceStartDelay_ - (steadyNow() - countdownStart_));
+                                           return fmt::format("COUNTDOWN {:.1f} s -> {}", left,
+                                                              reservedTarget_.empty() ? std::string("(press a bottle)")
+                                                                                      : reservedLabel_);
+                                         }
+                                         if(executor_.state() != "KinovaController_Initial")
+                                         {
+                                           return "robot busy";
+                                         }
+                                         return alive ? std::string("waiting for voice")
+                                                      : std::string("waiting (voice_trigger.py NOT running)");
+                                       }),
+                    mc_rtc::gui::NumberInput(
+                        "Voice start delay [s]", [this]() { return voiceStartDelay_; },
+                        [this](double v)
+                        {
+                          if(v > 0.0)
+                          {
+                            voiceStartDelay_ = v;
+                            mc_rtc::log::info("[Voice] Start delay -> {:.1f} s", v);
+                          }
+                        }));
+  gui()->addElement({"KinovaController", "Bottle picks"}, mc_rtc::gui::ElementsStacking::Horizontal,
+                    mc_rtc::gui::Button("Simulate voice", [this]() { startCountdown("GUI button"); }),
+                    mc_rtc::gui::Button("Cancel countdown",
+                                        [this]()
+                                        {
+                                          if(countdownActive_)
+                                          {
+                                            countdownActive_ = false;
+                                            reservedTarget_.clear();
+                                            mc_rtc::log::info("[Voice] Countdown cancelled by the operator");
+                                          }
+                                        }));
 
   // Software emergency stop: loopback UDP listener fed by scripts/estop_mouse.py
   // (mouse middle-click). Non-blocking, polled once per control tick in run().
+  voiceSock_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if(voiceSock_ >= 0)
+  {
+    sockaddr_in vaddr;
+    std::memset(&vaddr, 0, sizeof(vaddr));
+    vaddr.sin_family = AF_INET;
+    vaddr.sin_port = htons(static_cast<uint16_t>(voicePort_));
+    vaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if(::bind(voiceSock_, reinterpret_cast<sockaddr *>(&vaddr), sizeof(vaddr)) != 0
+       || ::fcntl(voiceSock_, F_SETFL, ::fcntl(voiceSock_, F_GETFL, 0) | O_NONBLOCK) != 0)
+    {
+      mc_rtc::log::error("[KinovaController] Voice listener could not bind 127.0.0.1:{} ({})", voicePort_,
+                         std::strerror(errno));
+      ::close(voiceSock_);
+      voiceSock_ = -1;
+    }
+    else
+    {
+      mc_rtc::log::info("[KinovaController] Voice listener on 127.0.0.1:{} (start delay {:.1f} s)", voicePort_,
+                        voiceStartDelay_);
+    }
+  }
   config("estopPort", estopPort_);
   estopSock_ = ::socket(AF_INET, SOCK_DGRAM, 0);
   if(estopSock_ >= 0)
@@ -316,6 +416,78 @@ KinovaController::~KinovaController()
   {
     ::close(estopSock_);
   }
+  if(voiceSock_ >= 0)
+  {
+    ::close(voiceSock_);
+  }
+}
+
+void KinovaController::startCountdown(const std::string & source)
+{
+  if(!voiceTriggerEnabled_ || countdownActive_ || executor_.state() != "KinovaController_Initial")
+  {
+    return; // only from idle; a second request during a countdown does not restart it
+  }
+  countdownActive_ = true;
+  countdownStart_ = steadyNow();
+  countdownVoiceEpochMs_ =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  reservedTarget_.clear();
+  reservedLabel_.clear();
+  mc_rtc::log::success("[Voice] Request detected ({}): robot starts in {:.1f} s — press the bottle button", source,
+                       voiceStartDelay_);
+}
+
+void KinovaController::tickCountdown()
+{
+  if(!countdownActive_)
+  {
+    return;
+  }
+  if(executor_.state() != "KinovaController_Initial")
+  {
+    countdownActive_ = false; // e.g. emergency stop or NG pointing started meanwhile
+    reservedTarget_.clear();
+    mc_rtc::log::warning("[Voice] Countdown cancelled: robot left Initial ({})", executor_.state());
+    return;
+  }
+  if(steadyNow() - countdownStart_ < voiceStartDelay_)
+  {
+    return;
+  }
+  countdownActive_ = false;
+  if(reservedTarget_.empty())
+  {
+    mc_rtc::log::warning("[Voice] Countdown ended with no bottle selected: nothing started");
+    return;
+  }
+  mc_rtc::log::success("[Voice] Starting {} ({:.1f} s after the request)", reservedLabel_, voiceStartDelay_);
+  pendingVoiceEpochMs_ = countdownVoiceEpochMs_;
+  executor_.resume(reservedTarget_);
+  reservedTarget_.clear();
+}
+
+void KinovaController::pollVoice()
+{
+  if(voiceSock_ < 0)
+  {
+    return;
+  }
+  char buf[32];
+  for(int n = 0; n < 64; ++n)
+  {
+    const ssize_t len = ::recv(voiceSock_, buf, sizeof(buf) - 1, 0);
+    if(len <= 0)
+    {
+      break;
+    }
+    buf[len] = '\0';
+    voiceLastAlive_ = steadyNow();
+    if(std::strncmp(buf, "VOICE", 5) == 0)
+    {
+      startCountdown("microphone");
+    }
+  }
 }
 
 void KinovaController::startEstopWatcher(const std::string & script)
@@ -398,6 +570,8 @@ bool KinovaController::run()
     estopPending_ = false;
   }
   pollEmergencyStop();
+  pollVoice();
+  tickCountdown();
   distanceEECard1_ = (compEETask->positionTask->position() - cardPosition_1).norm();
   distanceEECard2_ = (compEETask->positionTask->position() - cardPosition_2).norm();
   distanceEECard3_ = (compEETask->positionTask->position() - cardPosition_3).norm();

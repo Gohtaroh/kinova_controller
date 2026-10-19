@@ -232,6 +232,16 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
       runLog_.meta(fmt::format("state: {}", name()));
       runLog_.meta(fmt::format("started: {}", when));
       runLog_.meta(fmt::format("started_epoch_ms: {}", epochMs));
+      const long long voiceMs = ctl.consumeVoiceEpochMs();
+      if(voiceMs > 0)
+      {
+        runLog_.meta(fmt::format("voice_request_epoch_ms: {} (start {:.3f} s after the request)", voiceMs,
+                                 (epochMs - voiceMs) / 1000.0));
+      }
+      else
+      {
+        runLog_.meta("voice_request_epoch_ms: none (not voice-triggered)");
+      }
       runLog_.meta(fmt::format("robot: {}", ctl.robot().name()));
       runLog_.meta(fmt::format("timestep: {}", ctl.timeStep));
       runLog_.meta(fmt::format("decimation: {}", decim));

@@ -67,6 +67,16 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
   // speed of a condition is (1 + 0.875 * alpha) / factor times `speed`, i.e. with
   // the default Tool ~0.70x and Partner ~1.30x of Baseline's peak. Set 1.875 to keep
   // every condition's peak at or below `speed` (e.g. to stay under a speed cap).
+  /** Wall-clock time [epoch ms] of the voice request that started the pick that is
+   *  starting now, or 0 if it was not voice-triggered. Cleared when read. */
+  long long consumeVoiceEpochMs()
+  {
+    const long long v = pendingVoiceEpochMs_;
+    pendingVoiceEpochMs_ = 0;
+    return v;
+  }
+  long long pendingVoiceEpochMs_ = 0;
+
   double handoverDurationFactor() const
   {
     return handoverDurationFactor_;
@@ -132,6 +142,25 @@ private:
   int estopWatcherPid_ = -1;
   void startEstopWatcher(const std::string & script);
   void pollEmergencyStop();
+
+  // --- Voice trigger (2026-10-19) ---------------------------------------------
+  // scripts/voice_trigger.py sends "VOICE" (and "ALIVE") to 127.0.0.1:voicePort_.
+  // In Initial, a VOICE starts a countdown of voiceStartDelay_ seconds; during it
+  // the bottle buttons RESERVE a target (a later press overrides it). When the
+  // countdown ends the reserved pick starts; with no reservation nothing moves.
+  int voiceSock_ = -1;
+  int voicePort_ = 47801;
+  bool voiceTriggerEnabled_ = true;
+  double voiceStartDelay_ = 5.0; // [s] voice -> robot starts (ethics: about 5 s, same in all conditions)
+  double voiceLastAlive_ = -1.0e9;
+  bool countdownActive_ = false;
+  double countdownStart_ = 0.0; // [s, steady clock]
+  long long countdownVoiceEpochMs_ = 0; // wall clock of the VOICE that started it
+  std::string reservedTarget_; // FSM state to start, empty = none
+  std::string reservedLabel_;
+  void pollVoice();
+  void startCountdown(const std::string & source);
+  void tickCountdown();
   bool estopWatcherAlive() const;
 
   Eigen::Vector3d initialEEPosition_;
