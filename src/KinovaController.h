@@ -154,7 +154,8 @@ private:
   int voiceSock_ = -1;
   int voicePort_ = 47801;
   bool voiceTriggerEnabled_ = true;
-  double voiceStartDelay_ = 3.0; // [s] voice -> robot starts (3 s, user 2026-10-19; ethics document says about 5 s)
+  double voiceStartDelay_ = 4.0; // [s] voice -> robot starts (4 s, user 2026-10-19: ~0.5 s of speech + 4 s ~ "about 5 s
+                                 // after the request" in the ethics documents)
   double voiceLastAlive_ = -1.0e9;
   // Loudness gate (set in the GUI / config): VOICE messages quieter than this are
   // ignored. Live level stats come from the watcher every 0.1 s.
@@ -167,7 +168,8 @@ private:
   std::string lastVoiceTime_; // HH:MM:SS of the last decided utterance
   std::string lastVoiceVerdict_; // ACCEPTED / REJECTED (...) of that utterance
   // Utterance tracking from the 0.1 s STAT stream (decision is made here).
-  double voiceMinDuration_ = 1.0; // [s] speech must last this long (a tap / clank is far shorter)
+  double voiceMinDuration_ = 0.5; // [s] speech must last this long (default 0.5 s, user 2026-10-19; taps/typing are
+                                  // also rejected by the voicing check)
   double voiceMaxGap_ = 0.4; // [s] pauses shorter than this stay in the same utterance
   double uttSpeech_ = 0.0; // [s] loud-enough speech accumulated in the current utterance
   double uttQuiet_ = 0.0; // [s] speech below the level threshold in the current utterance
