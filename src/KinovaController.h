@@ -141,7 +141,9 @@ private:
   // The watcher script is started automatically with the controller and stopped
   // with it (estopWatcherAutostart, estopWatcherScript in the controller config).
   int estopWatcherPid_ = -1;
-  void startEstopWatcher(const std::string & script);
+  int voiceWatcherPid_ = -1;
+  /** Fork `python3 script args...` as a child that dies with the controller. */
+  int startWatcher(const std::string & what, const std::string & script, const std::vector<std::string> & args);
   void pollEmergencyStop();
 
   // --- Voice trigger (2026-10-19) ---------------------------------------------
@@ -162,7 +164,16 @@ private:
   double micSpeechFrac_ = 0.0;
   double lastVoiceLevelDb_ = -120.0;
   bool lastVoiceAccepted_ = false;
-  std::string lastVoiceTime_; // HH:MM:SS of the last VOICE message
+  std::string lastVoiceTime_; // HH:MM:SS of the last decided utterance
+  std::string lastVoiceVerdict_; // ACCEPTED / REJECTED (...) of that utterance
+  // Utterance tracking from the 0.1 s STAT stream (decision is made here).
+  double voiceMinDuration_ = 1.0; // [s] speech must last this long (a tap / clank is far shorter)
+  double voiceMaxGap_ = 0.4; // [s] pauses shorter than this stay in the same utterance
+  double uttSpeech_ = 0.0; // [s] loud-enough speech accumulated in the current utterance
+  double uttQuiet_ = 0.0; // [s] speech below the level threshold in the current utterance
+  double uttGap_ = 0.0; // [s] current silence
+  double uttPeak_ = -120.0; // [dBFS]
+  bool uttFired_ = false;
   bool countdownActive_ = false;
   double countdownStart_ = 0.0; // [s, steady clock]
   long long countdownVoiceEpochMs_ = 0; // wall clock of the VOICE that started it

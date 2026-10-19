@@ -299,8 +299,18 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                              return "-";
                            }
                            return fmt::format("{}  {:.1f} dBFS  {}", lastVoiceTime_, lastVoiceLevelDb_,
-                                              lastVoiceAccepted_ ? "ACCEPTED" : "REJECTED (below threshold)");
+                                              lastVoiceVerdict_);
                          }),
+      mc_rtc::gui::NumberInput(
+          "Voice min duration [s]", [this]() { return voiceMinDuration_; },
+          [this](double v)
+          {
+            if(v > 0.0)
+            {
+              voiceMinDuration_ = v;
+              mc_rtc::log::info("[Voice] Minimum speech duration -> {:.1f} s", v);
+            }
+          }),
       mc_rtc::gui::NumberInput(
           "Voice min level [dBFS]", [this]() { return voiceMinLevelDb_; },
           [this](double v)
@@ -385,7 +395,18 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
     const char * home = std::getenv("HOME");
     const std::string defaultScript =
         std::string(home ? home : "") + "/workspace/src/kinova_controller/scripts/estop_mouse.py";
-    startEstopWatcher(config("estopWatcherScript", defaultScript));
+    estopWatcherPid_ = startWatcher("mouse emergency-stop watcher", config("estopWatcherScript", defaultScript),
+                                    {"--port", std::to_string(estopPort_)});
+  }
+  // Same for the microphone feed of the voice trigger (decisions are made here).
+  config("voiceMinDuration", voiceMinDuration_);
+  if(voiceSock_ >= 0 && voiceTriggerEnabled_ && config("voiceWatcherAutostart", true))
+  {
+    const char * home = std::getenv("HOME");
+    const std::string defaultScript =
+        std::string(home ? home : "") + "/workspace/src/kinova_controller/scripts/voice_trigger.py";
+    voiceWatcherPid_ = startWatcher("voice trigger microphone feed", config("voiceWatcherScript", defaultScript),
+                                    {"--port", std::to_string(voicePort_), "--quiet"});
   }
   gui()->addElement({"KinovaController", "Emergency stop"},
                     mc_rtc::gui::Label("Mouse middle-click stop",
@@ -430,12 +451,15 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
 
 KinovaController::~KinovaController()
 {
-  if(estopWatcherPid_ > 0)
+  for(int pid : {estopWatcherPid_, voiceWatcherPid_})
   {
-    ::kill(estopWatcherPid_, SIGTERM);
-    for(int i = 0; i < 20 && ::waitpid(estopWatcherPid_, nullptr, WNOHANG) == 0; ++i)
+    if(pid > 0)
     {
-      ::usleep(50000);
+      ::kill(pid, SIGTERM);
+      for(int i = 0; i < 20 && ::waitpid(pid, nullptr, WNOHANG) == 0; ++i)
+      {
+        ::usleep(50000);
+      }
     }
   }
   if(estopSock_ >= 0)
@@ -509,73 +533,119 @@ void KinovaController::pollVoice()
     }
     buf[len] = '\0';
     voiceLastAlive_ = steadyNow();
-    if(std::strncmp(buf, "STAT", 4) == 0)
+    if(std::strncmp(buf, "STAT", 4) != 0)
     {
-      double l = 0, f = 0, sp = 0;
-      if(std::sscanf(buf + 4, "%lf %lf %lf", &l, &f, &sp) == 3)
-      {
-        micLevelDb_ = l;
-        micFloorDb_ = f;
-        micSpeechFrac_ = sp;
-      }
+      continue;
     }
-    else if(std::strncmp(buf, "VOICE", 5) == 0)
+    double l = 0, f = 0, sp = 0, pk = -120.0;
+    const int nf = std::sscanf(buf + 4, "%lf %lf %lf %lf", &l, &f, &sp, &pk);
+    if(nf < 3)
     {
-      double l = 0.0;
-      const bool hasLevel = std::sscanf(buf + 5, "%lf", &l) == 1;
+      continue;
+    }
+    if(nf < 4)
+    {
+      pk = l;
+    }
+    micLevelDb_ = l;
+    micFloorDb_ = f;
+    micSpeechFrac_ = sp;
+    // Utterance decision: speech must last voiceMinDuration_ (a tap or clank is
+    // much shorter) and be at least voiceMinLevelDb_ loud. Short pauses
+    // (< voiceMaxGap_) between syllables stay in the same utterance.
+    const double dt = 0.1;
+    auto stamp = []()
+    {
       const std::time_t now = std::time(nullptr);
       char hms[16];
       std::strftime(hms, sizeof(hms), "%H:%M:%S", std::localtime(&now));
-      if(lastVoiceTime_ == hms && hasLevel && l == lastVoiceLevelDb_)
+      return std::string(hms);
+    };
+    if(sp >= 0.5)
+    {
+      uttGap_ = 0.0;
+      if(pk >= voiceMinLevelDb_)
       {
-        continue; // the watcher sends each VOICE three times
+        uttSpeech_ += dt;
+        uttPeak_ = std::max(uttPeak_, pk);
       }
-      lastVoiceTime_ = hms;
-      lastVoiceLevelDb_ = hasLevel ? l : 0.0;
-      lastVoiceAccepted_ = !hasLevel || l >= voiceMinLevelDb_;
-      if(!lastVoiceAccepted_)
+      else
       {
-        mc_rtc::log::info("[Voice] Ignored: {:.1f} dBFS is below the minimum {:.1f} dBFS", l, voiceMinLevelDb_);
-        continue;
+        uttQuiet_ += dt;
       }
-      if(!countdownActive_ && executor_.state() == "KinovaController_Initial")
+      if(!uttFired_ && uttSpeech_ >= voiceMinDuration_ - 1e-6)
       {
-        pendingVoiceLevelDb_ = lastVoiceLevelDb_;
+        uttFired_ = true;
+        lastVoiceTime_ = stamp();
+        lastVoiceLevelDb_ = uttPeak_;
+        lastVoiceAccepted_ = true;
+        lastVoiceVerdict_ = fmt::format("ACCEPTED ({:.1f} s)", uttSpeech_);
+        if(!countdownActive_ && executor_.state() == "KinovaController_Initial")
+        {
+          pendingVoiceLevelDb_ = uttPeak_;
+        }
+        startCountdown(fmt::format("microphone, {:.1f} s, {:.1f} dBFS", uttSpeech_, uttPeak_));
       }
-      startCountdown(fmt::format("microphone, {:.1f} dBFS", lastVoiceLevelDb_));
+    }
+    else
+    {
+      uttGap_ += dt;
+      if(uttGap_ > voiceMaxGap_ && (uttSpeech_ > 0.0 || uttQuiet_ > 0.0))
+      {
+        if(!uttFired_)
+        {
+          lastVoiceTime_ = stamp();
+          lastVoiceLevelDb_ = uttSpeech_ > 0.0 ? uttPeak_ : pk;
+          lastVoiceAccepted_ = false;
+          lastVoiceVerdict_ = uttSpeech_ >= uttQuiet_ ? fmt::format("REJECTED (too short: {:.1f} s)", uttSpeech_)
+                                                      : fmt::format("REJECTED (too quiet, {:.1f} s)", uttQuiet_);
+          mc_rtc::log::info("[Voice] Ignored sound: {}", lastVoiceVerdict_);
+        }
+        uttSpeech_ = uttQuiet_ = 0.0;
+        uttPeak_ = -120.0;
+        uttFired_ = false;
+      }
     }
   }
 }
 
-void KinovaController::startEstopWatcher(const std::string & script)
+int KinovaController::startWatcher(const std::string & what,
+                                   const std::string & script,
+                                   const std::vector<std::string> & args)
 {
   if(!std::getenv("DISPLAY"))
   {
-    mc_rtc::log::warning("[KinovaController] No DISPLAY: mouse emergency-stop watcher not started");
-    return;
+    mc_rtc::log::warning("[KinovaController] No DISPLAY: {} not started", what);
+    return -1;
   }
   if(::access(script.c_str(), R_OK) != 0)
   {
-    mc_rtc::log::error("[KinovaController] Mouse emergency-stop watcher not found: {}", script);
-    return;
+    mc_rtc::log::error("[KinovaController] {} not found: {}", what, script);
+    return -1;
   }
-  const std::string port = std::to_string(estopPort_);
+  std::vector<std::string> argv = {"python3", script};
+  argv.insert(argv.end(), args.begin(), args.end());
+  std::vector<char *> cargv;
+  for(auto & s : argv)
+  {
+    cargv.push_back(const_cast<char *>(s.c_str()));
+  }
+  cargv.push_back(nullptr);
   const pid_t pid = ::fork();
   if(pid == 0)
   {
     // Child: die with the controller process, then become the watcher.
     ::prctl(PR_SET_PDEATHSIG, SIGTERM);
-    ::execlp("python3", "python3", script.c_str(), "--port", port.c_str(), static_cast<char *>(nullptr));
+    ::execvp("python3", cargv.data());
     ::_exit(127);
   }
   if(pid < 0)
   {
-    mc_rtc::log::error("[KinovaController] Could not start the mouse emergency-stop watcher ({})",
-                       std::strerror(errno));
-    return;
+    mc_rtc::log::error("[KinovaController] Could not start the {} ({})", what, std::strerror(errno));
+    return -1;
   }
-  estopWatcherPid_ = pid;
-  mc_rtc::log::info("[KinovaController] Mouse emergency-stop watcher started (pid {}): {}", pid, script);
+  mc_rtc::log::info("[KinovaController] {} started (pid {}): {}", what, pid, script);
+  return pid;
 }
 
 bool KinovaController::estopWatcherAlive() const
