@@ -168,6 +168,15 @@ private:
   int dofJoint4_ = -1;
   bool forceDetectAvailable_ = false;
   bool baselineCaptured_ = false;
+  // The resting baseline is the MEAN over baselineWindow_ seconds after the arm
+  // delay, not one sample: after the stop the arm rings at ~5-6 Hz, and a single
+  // sample taken on a ringing peak made the detector release with no pull
+  // (2026-10-19 run analysis). 0.3 s covers more than one ringing period.
+  double baselineWindow_ = 0.3; // [s]
+  double baselineSum2_ = 0.0;
+  double baselineSum4_ = 0.0;
+  int baselineN_ = 0;
+  double baselineTimer_ = 0.0;
   double baselineJoint2_ = 0.0;
   double baselineJoint4_ = 0.0;
   double lastTau2_ = 0.0;

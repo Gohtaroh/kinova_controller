@@ -45,6 +45,7 @@ void KinovaController_Bottle1::configure(const mc_rtc::Configuration & config)
   config("earlyDebounceTime", earlyDebounceTime_);
   config("armDelay", armDelay_);
   config("debounceTime", debounceTime_);
+  config("baselineWindow", baselineWindow_);
   config("gripperSettle", gripperSettle_);
   config("convergenceGrace", convergenceGrace_);
   config("minMoveTime", minMoveTime_);
@@ -266,6 +267,8 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
                                pullJoint4Thresh_, pullJoint2Thresh_, pullJoint4Abs_, pullJoint2Abs_,
                                earlyPullJoint4Abs_, earlyPullJoint2Abs_, debounceTime_, earlyDebounceTime_));
       runLog_.meta(fmt::format("auto_release_after: {}", autoReleaseAfter_));
+      runLog_.meta(
+          fmt::format("baseline_window: {} (pull-detection baseline = mean over this many seconds)", baselineWindow_));
       runLog_.meta("phases: 0 MOVE_TO_APPROACH, 1 MOVE_TO_GRASP, 2 CLOSE_GRIPPER, 3 MOVE_TO_LIFTUP, "
                    "4 MOVE_TO_PRESENT, 5 HOLDING, 6 RELEASING, 7 RETURN_TO_HOME, 8 DONE");
       runLog_.meta("release_trigger: 0 none, 1 pull (delta/abs), 2 early pull, 3 manual button, 4 auto (sim)");
@@ -523,6 +526,9 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         debounceTimer_ = 0.0;
         earlyDebounceTimer_ = 0.0;
         baselineCaptured_ = false;
+        baselineSum2_ = baselineSum4_ = 0.0;
+        baselineN_ = 0;
+        baselineTimer_ = 0.0;
         phase_ = HOLDING;
       }
       break;
@@ -552,13 +558,22 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         {
           if(!baselineCaptured_)
           {
-            baselineJoint2_ = t2;
-            baselineJoint4_ = t4;
-            baselineCaptured_ = true;
-            lastD2_ = 0.0;
-            lastD4_ = 0.0;
-            note(fmt::format("Detection armed, baseline joint_2={:.2f} joint_4={:.2f}", baselineJoint2_,
-                             baselineJoint4_));
+            // Average over baselineWindow_ (no delta detection meanwhile; the
+            // absolute-threshold early path below stays active).
+            baselineSum2_ += t2;
+            baselineSum4_ += t4;
+            ++baselineN_;
+            baselineTimer_ += ctl.timeStep;
+            if(baselineTimer_ >= baselineWindow_)
+            {
+              baselineJoint2_ = baselineSum2_ / baselineN_;
+              baselineJoint4_ = baselineSum4_ / baselineN_;
+              baselineCaptured_ = true;
+              lastD2_ = 0.0;
+              lastD4_ = 0.0;
+              note(fmt::format("Detection armed, baseline joint_2={:.2f} joint_4={:.2f} (mean of {:.2f} s)",
+                               baselineJoint2_, baselineJoint4_, baselineTimer_));
+            }
           }
           else
           {
