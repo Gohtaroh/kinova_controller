@@ -9,6 +9,7 @@
 struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Controller
 {
   KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const mc_rtc::Configuration & config);
+  ~KinovaController() override;
 
   bool run() override;
 
@@ -116,6 +117,18 @@ private:
   size_t handoverCondition_ = 1; // default: Baseline
   // Common move-duration factor (see handoverDurationFactor()).
   double handoverDurationFactor_ = 1.4375;
+
+  // --- Software emergency stop via mouse middle-click (2026-10-19) -----------
+  // scripts/estop_mouse.py watches the X11 middle mouse button and sends UDP
+  // datagrams to 127.0.0.1:estopPort_ ("ESTOP" on a click, "ALIVE" every 0.5 s).
+  // On ESTOP the running state is interrupted and KinovaController_EStop takes
+  // over (holds the pose, gripper untouched). Loopback only: no firewall change.
+  int estopSock_ = -1;
+  int estopPort_ = 47800;
+  double estopLastAlive_ = -1.0e9; // [s, steady clock] last heartbeat from the watcher
+  bool estopPending_ = false; // ESTOP received, switch to KinovaController_EStop not done yet
+  void pollEmergencyStop();
+  bool estopWatcherAlive() const;
 
   Eigen::Vector3d initialEEPosition_;
   Eigen::Vector3d finalEEPosition_;

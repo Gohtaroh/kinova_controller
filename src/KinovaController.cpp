@@ -2,8 +2,26 @@
 #include <mc_rtc/constants.h>
 #include <mc_rtc/gui/Button.h>
 #include <mc_rtc/gui/ComboInput.h>
+#include <mc_rtc/gui/Label.h>
 #include <mc_rtc/logging.h>
+
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <chrono>
 #include <cmath>
+#include <cstring>
+
+namespace
+{
+double steadyNow()
+{
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
 
 KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const mc_rtc::Configuration & config)
 : mc_control::fsm::Controller(rm, dt, config, Backend::TVM)
@@ -206,6 +224,45 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                     pickButton(bottleLabels[1], "Bottle2"), pickButton(bottleLabels[2], "Bottle3"),
                     pickButton(bottleLabels[3], "Bottle4"));
 
+  // Software emergency stop: loopback UDP listener fed by scripts/estop_mouse.py
+  // (mouse middle-click). Non-blocking, polled once per control tick in run().
+  config("estopPort", estopPort_);
+  estopSock_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if(estopSock_ >= 0)
+  {
+    sockaddr_in addr;
+    std::memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(estopPort_));
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if(::bind(estopSock_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0
+       || ::fcntl(estopSock_, F_SETFL, ::fcntl(estopSock_, F_GETFL, 0) | O_NONBLOCK) != 0)
+    {
+      mc_rtc::log::error("[KinovaController] Emergency-stop listener could not bind 127.0.0.1:{} ({}); "
+                         "mouse emergency stop DISABLED",
+                         estopPort_, std::strerror(errno));
+      ::close(estopSock_);
+      estopSock_ = -1;
+    }
+    else
+    {
+      mc_rtc::log::info("[KinovaController] Emergency-stop listener on 127.0.0.1:{} (run scripts/estop_mouse.py)",
+                        estopPort_);
+    }
+  }
+  gui()->addElement({"KinovaController", "Emergency stop"},
+                    mc_rtc::gui::Label("Mouse middle-click stop",
+                                       [this]()
+                                       {
+                                         if(estopSock_ < 0)
+                                         {
+                                           return std::string("DISABLED (listener failed)");
+                                         }
+                                         return estopWatcherAlive()
+                                                    ? std::string("ACTIVE")
+                                                    : std::string("NOT RUNNING (start scripts/estop_mouse.py)");
+                                       }));
+
   // Add logging
   logger().addLogEntry("KinovaController_DirectionVec", [this]() { return directionVec; });
   logger().addLogEntry("KinovaController_DirectionVec_norm", [this]() { return directionVec.norm(); });
@@ -233,8 +290,63 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   mc_rtc::log::success("KinovaController init done ");
 }
 
+KinovaController::~KinovaController()
+{
+  if(estopSock_ >= 0)
+  {
+    ::close(estopSock_);
+  }
+}
+
+bool KinovaController::estopWatcherAlive() const
+{
+  return steadyNow() - estopLastAlive_ < 2.0;
+}
+
+void KinovaController::pollEmergencyStop()
+{
+  if(estopSock_ < 0)
+  {
+    return;
+  }
+  char buf[32];
+  for(int n = 0; n < 64; ++n) // drain everything queued this tick
+  {
+    const ssize_t len = ::recv(estopSock_, buf, sizeof(buf) - 1, 0);
+    if(len <= 0)
+    {
+      break;
+    }
+    buf[len] = '\0';
+    if(std::strncmp(buf, "ALIVE", 5) == 0)
+    {
+      if(!estopWatcherAlive())
+      {
+        mc_rtc::log::success("[KinovaController] Mouse emergency-stop watcher connected");
+      }
+      estopLastAlive_ = steadyNow();
+    }
+    else if(std::strncmp(buf, "ESTOP", 5) == 0)
+    {
+      estopLastAlive_ = steadyNow();
+      // The switch happens on the next FSM tick, so ignore repeats until then.
+      if(executor_.state() != "KinovaController_EStop" && !estopPending_)
+      {
+        estopPending_ = true;
+        mc_rtc::log::critical("[KinovaController] EMERGENCY STOP (mouse middle-click) during {}", executor_.state());
+        executor_.resume("KinovaController_EStop");
+      }
+    }
+  }
+}
+
 bool KinovaController::run()
 {
+  if(estopPending_ && executor_.state() == "KinovaController_EStop")
+  {
+    estopPending_ = false;
+  }
+  pollEmergencyStop();
   distanceEECard1_ = (compEETask->positionTask->position() - cardPosition_1).norm();
   distanceEECard2_ = (compEETask->positionTask->position() - cardPosition_2).norm();
   distanceEECard3_ = (compEETask->positionTask->position() - cardPosition_3).norm();

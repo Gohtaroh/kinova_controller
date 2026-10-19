@@ -687,6 +687,10 @@ void KinovaController_Bottle1::teardown(mc_control::fsm::Controller & ctl_)
   // Hand the buffered run to the background writer (no disk I/O on this thread).
   if(runLog_.active())
   {
+    if(phase_ != DONE)
+    {
+      runLog_.event(runTime_, "Interrupted before completion (emergency stop or forced transition)");
+    }
     mc_rtc::log::info("[{}] Run finished after {:.2f} s, {} samples -> {}", name(), runTime_, runLog_.rows(),
                       runLog_.path());
     runLog_.finish();

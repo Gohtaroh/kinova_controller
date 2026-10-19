@@ -120,6 +120,11 @@ transitions:
 - [Bottle3, OK, KinovaController_Initial, Auto]
 - [KinovaController_Initial, Bottle4, Bottle4, Strict]
 - [Bottle4, OK, KinovaController_Initial, Auto]
+# Software emergency stop (mouse middle-click via scripts/estop_mouse.py). Entered
+# by interrupting any state (KinovaController::pollEmergencyStop); it holds the
+# pose until the operator presses "Emergency stop" -> "Return home (safe)", then
+# returns home in joint space and auto-advances to Initial.
+- [KinovaController_EStop, OK, KinovaController_Initial, Auto]
 
 # Initial state
 init: KinovaController_Initial

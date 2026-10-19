@@ -7,5 +7,6 @@ add_fsm_state_simple(KinovaController_TestSequence)
 add_fsm_state_simple(KinovaController_BottlePick)
 add_fsm_state_simple(KinovaController_NGPoint)
 add_fsm_state_simple(KinovaController_Bottle1)
+add_fsm_state_simple(KinovaController_EStop)
 
 add_fsm_data_directory(data)
