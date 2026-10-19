@@ -176,9 +176,12 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                         }));
 
   gui()->addElement({"KinovaController", "Movement"}, mc_rtc::gui::Point3DRO("Final Position", finalEEPosition_));
-  gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 1", cardPosition_1));
-  gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 2", cardPosition_2));
-  gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 3", cardPosition_3));
+  // "Card Positions" tab hidden from the GUI (2026-10-19, not used in the
+  // experiment). The positions are still used by NGPoint (cardIndex).
+  // gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 1",
+  // cardPosition_1)); gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position
+  // 2", cardPosition_2)); gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card
+  // Position 3", cardPosition_3));
 
   // Ordered one-button pick panel, laid out like the physical bench: NG on its own
   // row, then Bottle1..4 left-to-right below. The FSM's own "Force transition to X"
