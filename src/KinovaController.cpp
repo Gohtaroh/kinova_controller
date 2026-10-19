@@ -1,6 +1,7 @@
 #include "KinovaController.h"
 #include <mc_rtc/constants.h>
 #include <mc_rtc/gui/Button.h>
+#include <mc_rtc/gui/Checkbox.h>
 #include <mc_rtc/gui/ComboInput.h>
 #include <mc_rtc/gui/Label.h>
 #include <mc_rtc/gui/NumberInput.h>
@@ -215,6 +216,7 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   config("voiceStartDelay", voiceStartDelay_);
   config("voicePort", voicePort_);
   config("voiceMinLevelDb", voiceMinLevelDb_);
+  config("earlyPullRelease", earlyPullReleaseEnabled_);
   if(!(voiceStartDelay_ > 0.0))
   {
     mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] voiceStartDelay must be > 0 (got {})",
@@ -333,6 +335,15 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
               mc_rtc::log::info("[Voice] Start delay -> {:.1f} s", v);
             }
           }));
+  gui()->addElement({"KinovaController", "Bottle picks"},
+                    mc_rtc::gui::Checkbox(
+                        "Release on pull before the arm stops", [this]() { return earlyPullReleaseEnabled_; },
+                        [this]()
+                        {
+                          earlyPullReleaseEnabled_ = !earlyPullReleaseEnabled_;
+                          mc_rtc::log::info("[KinovaController] Early (before-stop) pull release -> {}",
+                                            earlyPullReleaseEnabled_ ? "ON" : "OFF (logged only)");
+                        }));
   gui()->addElement({"KinovaController", "Bottle picks"}, mc_rtc::gui::ElementsStacking::Horizontal,
                     mc_rtc::gui::Button("Simulate voice", [this]() { startCountdown("GUI button"); }),
                     mc_rtc::gui::Button("Cancel countdown",

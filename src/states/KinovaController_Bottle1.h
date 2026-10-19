@@ -134,6 +134,8 @@ private:
   double segProgress_ = 0.0; // t/tf of the current segment, clamped to [0, 1]
   /** Record a line in the mc_rtc terminal log AND as a run-log event. */
   void note(const std::string & text);
+  /** Before-stop pull check (window entry, MA vs reference, debounce). Returns true to release now. */
+  bool earlyPullCheck(mc_control::fsm::Controller & ctl);
   /** Append this tick's sample row to the run log. */
   void logRow(mc_control::fsm::Controller & ctl);
 
@@ -204,6 +206,25 @@ private:
   int maBaseN_ = 0;
   double maBaseline_ = 0.0;
   bool maArmed_ = false;
+  double lastRawMa_ = 0.0; // this tick's MA(tau2 - tau4), computed every tick in every phase
+  // Before-stop ("early") pull release, 2026-10-19 (analysis report Plan A):
+  // monitoring starts when the EE is within earlyWindowDist_ of the present pose;
+  // reference = mean of (tau2 - tau4) over the earlyRefWindow_ seconds just before
+  // entering the window; release when MA - reference > pullMaThresh_ for
+  // pullMaDebounce_. Stays active through HOLDING until the hold MA path arms.
+  // On/off from the controller GUI; when off, would-be releases are logged only.
+  double earlyWindowDist_ = 0.15; // [m]
+  double earlyRefWindow_ = 0.5; // [s]
+  std::vector<double> refBuf_;
+  size_t refIdx_ = 0;
+  size_t refCount_ = 0;
+  double refSum_ = 0.0;
+  bool earlyArmed_ = false;
+  double earlyRef_ = 0.0;
+  double lastEarlyMa_ = 0.0;
+  double earlyMaDebounce_ = 0.0;
+  bool earlyShadowLogged_ = false;
+  bool releaseFromCurrent_ = false; // released mid-motion: return home from the current pose
   double baselineJoint2_ = 0.0;
   double baselineJoint4_ = 0.0;
   double lastTau2_ = 0.0;

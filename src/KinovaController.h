@@ -76,6 +76,10 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
     return v;
   }
   long long pendingVoiceEpochMs_ = 0;
+  // Release the bottle when the participant pulls BEFORE the arm has stopped
+  // (last part of the move to the present pose). GUI toggle, default on
+  // (user 2026-10-19). When off, would-be releases are only logged.
+  bool earlyPullReleaseEnabled_ = true;
   double pendingVoiceLevelDb_ = 0.0; // level of that request [dBFS]
 
   double handoverDurationFactor() const

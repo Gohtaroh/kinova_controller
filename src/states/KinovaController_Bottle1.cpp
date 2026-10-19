@@ -50,6 +50,8 @@ void KinovaController_Bottle1::configure(const mc_rtc::Configuration & config)
   config("pullMaThresh", pullMaThresh_);
   config("pullMaDebounce", pullMaDebounce_);
   config("pullMaArmDelay", pullMaArmDelay_);
+  config("earlyWindowDist", earlyWindowDist_);
+  config("earlyRefWindow", earlyRefWindow_);
   config("gripperSettle", gripperSettle_);
   config("convergenceGrace", convergenceGrace_);
   config("minMoveTime", minMoveTime_);
@@ -214,7 +216,8 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
                           "early_debounce_timer",
                           "gripper_opening",
                           "release_trigger",
-                          "pull_ma"})
+                          "pull_ma",
+                          "early_ma"})
     {
       cols.push_back(c);
     }
@@ -277,7 +280,10 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
       runLog_.meta("phases: 0 MOVE_TO_APPROACH, 1 MOVE_TO_GRASP, 2 CLOSE_GRIPPER, 3 MOVE_TO_LIFTUP, "
                    "4 MOVE_TO_PRESENT, 5 HOLDING, 6 RELEASING, 7 RETURN_TO_HOME, 8 DONE");
       runLog_.meta("release_trigger: 0 none, 1 pull (delta/abs), 2 early pull, 3 manual button, 4 auto (sim), "
-                   "5 pull (moving average)");
+                   "5 pull (moving average), 6 pull before the arm stopped (before-stop path)");
+      runLog_.meta(fmt::format("before_stop_release: {} (window {} m, reference {} s before the window)",
+                               ctl.earlyPullReleaseEnabled_ ? "ON" : "OFF (logged only)", earlyWindowDist_,
+                               earlyRefWindow_));
       runLog_.meta(fmt::format("pull_ma: window {} s, threshold {} Nm on MA(tau2 - tau4) - baseline, debounce {} s, "
                                "armed {} s + {} s baseline after the stop (independent of arm_delay)",
                                pullMaWindow_, pullMaThresh_, pullMaDebounce_, pullMaArmDelay_, baselineWindow_));
@@ -336,6 +342,17 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
   // Low-weight posture regularization anchored on home (null-space bias).
   ctl.compPostureTask->target(ctl.postureHome);
 
+  // Moving-average and reference buffers run continuously from the start.
+  maBuf_.assign(static_cast<size_t>(std::max(1.0, std::round(pullMaWindow_ / ctl.timeStep))), 0.0);
+  maIdx_ = maCount_ = 0;
+  maSum_ = 0.0;
+  refBuf_.assign(static_cast<size_t>(std::max(1.0, std::round(earlyRefWindow_ / ctl.timeStep))), 0.0);
+  refIdx_ = refCount_ = 0;
+  refSum_ = 0.0;
+  earlyArmed_ = false;
+  earlyRef_ = lastEarlyMa_ = earlyMaDebounce_ = 0.0;
+  earlyShadowLogged_ = false;
+  releaseFromCurrent_ = false;
   initSegment(ctl_, approachPt_, approachSpeed_, /*continuous=*/false);
   phase_ = MOVE_TO_APPROACH;
   note(fmt::format("Moving to approach point ({:.1f} s)", tf_));
@@ -473,6 +490,36 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
     tauExt_ = ctl.datastore().call<Eigen::VectorXd>("EF_Estimator::getExternalTorques");
     lastTau2_ = tauExt_[dofJoint2_];
     lastTau4_ = tauExt_[dofJoint4_];
+    const double x = lastTau2_ - lastTau4_;
+    if(!maBuf_.empty())
+    {
+      if(maCount_ == maBuf_.size())
+      {
+        maSum_ -= maBuf_[maIdx_];
+      }
+      else
+      {
+        ++maCount_;
+      }
+      maBuf_[maIdx_] = x;
+      maSum_ += x;
+      maIdx_ = (maIdx_ + 1) % maBuf_.size();
+      lastRawMa_ = maSum_ / static_cast<double>(maCount_);
+    }
+    if(!refBuf_.empty() && !earlyArmed_)
+    {
+      if(refCount_ == refBuf_.size())
+      {
+        refSum_ -= refBuf_[refIdx_];
+      }
+      else
+      {
+        ++refCount_;
+      }
+      refBuf_[refIdx_] = x;
+      refSum_ += x;
+      refIdx_ = (refIdx_ + 1) % refBuf_.size();
+    }
   }
   // Physical (encoder-based) EE distance to the present pose.
   lastDistToPresent_ = (ctl.realRobot().bodyPosW("end_effector_link").translation() - presentEEPos_).norm();
@@ -528,6 +575,23 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
       }
       break;
     case MOVE_TO_PRESENT:
+      if(forceDetectAvailable_ && earlyPullCheck(ctl_))
+      {
+        // Pulled before the arm stopped: stop right here (hold the commanded
+        // pose), open the gripper, and later return home from this pose.
+        std::map<std::string, std::vector<double>> hold;
+        for(const auto & jn : jointNames)
+        {
+          hold[jn] = {ctl.robot().mbc().q[ctl.robot().jointIndexByName(jn)][0]};
+        }
+        ctl.compPostureTask->target(hold);
+        ctl.robot().gripper("gripper").setTargetOpening(1.0);
+        releaseFromCurrent_ = true;
+        releaseTrigger_ = 6;
+        timer_ = 0.0;
+        phase_ = RELEASING;
+        break;
+      }
       if(moveDone(ctl_, /*requireConvergence=*/true))
       {
         note("Present pose reached, holding. Pull the bottle to release, or press \"Return home (safe)\".");
@@ -536,9 +600,6 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         earlyDebounceTimer_ = 0.0;
         baselineCaptured_ = false;
         baselineSum2_ = baselineSum4_ = 0.0;
-        maBuf_.assign(static_cast<size_t>(std::max(1.0, std::round(pullMaWindow_ / ctl.timeStep))), 0.0);
-        maIdx_ = maCount_ = 0;
-        maSum_ = 0.0;
         lastMa_ = 0.0;
         maDebounceTimer_ = 0.0;
         maBaseSum_ = 0.0;
@@ -573,22 +634,16 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         bool over = false;
         bool maOver = false;
         bool earlyOver = (t4 > earlyPullJoint4Abs_) || (t2 > earlyPullJoint2Abs_) || (t2 < -earlyPullJoint2Abs_);
-        // Moving average of (tau2 - tau4) over one ringing period.
+        // Moving average of (tau2 - tau4) over one ringing period (updated every
+        // tick at the top of run()).
+        const double ma = lastRawMa_;
+        // The before-stop check continues after the stop until the hold MA path
+        // is armed, so there is no blind gap right after the stop.
+        if(!maArmed_ && earlyPullCheck(ctl_))
         {
-          const double x = t2 - t4;
-          if(maCount_ == maBuf_.size())
-          {
-            maSum_ -= maBuf_[maIdx_];
-          }
-          else
-          {
-            ++maCount_;
-          }
-          maBuf_[maIdx_] = x;
-          maSum_ += x;
-          maIdx_ = (maIdx_ + 1) % maBuf_.size();
+          release = true;
+          releaseTrigger_ = 6;
         }
-        const double ma = maSum_ / static_cast<double>(maCount_);
         // Moving-average path: its own early baseline and arming.
         if(holdTimer_ > pullMaArmDelay_)
         {
@@ -674,7 +729,8 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
         {
           homeDeg.push_back(ctl.postureHome.at(jn)[0] * 180.0 / mc_rtc::constants::PI);
         }
-        initMove(ctl_, homeDeg, returnSpeed_, /*continuous=*/true);
+        // After a mid-motion release, start from the actual (stopped) pose.
+        initMove(ctl_, homeDeg, returnSpeed_, /*continuous=*/!releaseFromCurrent_);
         note(fmt::format("Bottle released, moving straight to home ({:.1f} s)", tf_));
         phase_ = RETURN_TO_HOME;
       }
@@ -692,6 +748,43 @@ bool KinovaController_Bottle1::run(mc_control::fsm::Controller & ctl_)
       return true;
   }
   logRow(ctl_);
+  return false;
+}
+
+bool KinovaController_Bottle1::earlyPullCheck(mc_control::fsm::Controller & ctl_)
+{
+  auto & ctl = static_cast<KinovaController &>(ctl_);
+  if(!earlyArmed_)
+  {
+    if(lastDistToPresent_ < earlyWindowDist_ && refCount_ == refBuf_.size() && refCount_ > 0)
+    {
+      earlyRef_ = refSum_ / static_cast<double>(refCount_);
+      earlyArmed_ = true;
+      earlyMaDebounce_ = 0.0;
+      note(fmt::format("Before-stop pull monitoring started ({:.3f} m from the present pose, reference "
+                       "(tau2-tau4)={:.2f}, release {})",
+                       lastDistToPresent_, earlyRef_, ctl.earlyPullReleaseEnabled_ ? "ON" : "OFF/logged only"));
+    }
+    return false;
+  }
+  lastEarlyMa_ = lastRawMa_ - earlyRef_;
+  earlyMaDebounce_ = lastEarlyMa_ > pullMaThresh_ ? earlyMaDebounce_ + ctl.timeStep : 0.0;
+  if(earlyMaDebounce_ <= pullMaDebounce_)
+  {
+    return false;
+  }
+  if(ctl.earlyPullReleaseEnabled_)
+  {
+    note(fmt::format("Pull detected before the arm stopped (ma={:.2f}, {:.3f} m from the present pose), releasing",
+                     lastEarlyMa_, lastDistToPresent_));
+    return true;
+  }
+  if(!earlyShadowLogged_)
+  {
+    earlyShadowLogged_ = true;
+    note(fmt::format("Before-stop pull detected but release is OFF: logged only (ma={:.2f}, {:.3f} m)", lastEarlyMa_,
+                     lastDistToPresent_));
+  }
   return false;
 }
 
@@ -753,6 +846,7 @@ void KinovaController_Bottle1::logRow(mc_control::fsm::Controller & ctl_)
   rowBuf_.push_back(cmd.gripper("gripper").opening());
   rowBuf_.push_back(static_cast<double>(releaseTrigger_));
   rowBuf_.push_back(lastMa_);
+  rowBuf_.push_back(lastEarlyMa_);
   runLog_.row(rowBuf_);
 }
 
