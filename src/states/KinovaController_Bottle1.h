@@ -177,6 +177,22 @@ private:
   double baselineSum4_ = 0.0;
   int baselineN_ = 0;
   double baselineTimer_ = 0.0;
+  // Second release path (2026-10-19, run analysis): a pull makes the arm ring at
+  // ~6 Hz, so the instantaneous deviation keeps dipping back under its threshold
+  // and the strict 0.15 s debounce can take >1 s. This path averages
+  // (tau_ext_2 - tau_ext_4) over one ringing period (pullMaWindow_), which
+  // cancels the ringing, and compares it with the same quantity's resting
+  // baseline. Either path releases. Validated on the 2026-10-19 runs: no early
+  // release, the slow run would have released 1.5 s sooner.
+  double pullMaWindow_ = 0.18; // [s]
+  double pullMaThresh_ = 1.25; // [Nm] on MA(tau2 - tau4) - baseline (positive = pull)
+  double pullMaDebounce_ = 0.05; // [s]
+  std::vector<double> maBuf_;
+  size_t maIdx_ = 0;
+  size_t maCount_ = 0;
+  double maSum_ = 0.0;
+  double lastMa_ = 0.0; // MA(tau2 - tau4) - baseline, logged
+  double maDebounceTimer_ = 0.0;
   double baselineJoint2_ = 0.0;
   double baselineJoint4_ = 0.0;
   double lastTau2_ = 0.0;
