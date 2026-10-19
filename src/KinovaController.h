@@ -127,6 +127,10 @@ private:
   int estopPort_ = 47800;
   double estopLastAlive_ = -1.0e9; // [s, steady clock] last heartbeat from the watcher
   bool estopPending_ = false; // ESTOP received, switch to KinovaController_EStop not done yet
+  // The watcher script is started automatically with the controller and stopped
+  // with it (estopWatcherAutostart, estopWatcherScript in the controller config).
+  int estopWatcherPid_ = -1;
+  void startEstopWatcher(const std::string & script);
   void pollEmergencyStop();
   bool estopWatcherAlive() const;
 

@@ -8,7 +8,10 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <signal.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -246,9 +249,17 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
     }
     else
     {
-      mc_rtc::log::info("[KinovaController] Emergency-stop listener on 127.0.0.1:{} (run scripts/estop_mouse.py)",
-                        estopPort_);
+      mc_rtc::log::info("[KinovaController] Emergency-stop listener on 127.0.0.1:{}", estopPort_);
     }
+  }
+  // Start the mouse watcher with the controller so the operator never has to.
+  // A watcher started by hand as well is harmless (both just send ESTOP/ALIVE).
+  if(estopSock_ >= 0 && config("estopWatcherAutostart", true))
+  {
+    const char * home = std::getenv("HOME");
+    const std::string defaultScript =
+        std::string(home ? home : "") + "/workspace/src/kinova_controller/scripts/estop_mouse.py";
+    startEstopWatcher(config("estopWatcherScript", defaultScript));
   }
   gui()->addElement({"KinovaController", "Emergency stop"},
                     mc_rtc::gui::Label("Mouse middle-click stop",
@@ -260,7 +271,8 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                                          }
                                          return estopWatcherAlive()
                                                     ? std::string("ACTIVE")
-                                                    : std::string("NOT RUNNING (start scripts/estop_mouse.py)");
+                                                    : std::string(
+                                                        "NOT RUNNING (watcher failed to start: see terminal)");
                                        }));
 
   // Add logging
@@ -292,10 +304,49 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
 
 KinovaController::~KinovaController()
 {
+  if(estopWatcherPid_ > 0)
+  {
+    ::kill(estopWatcherPid_, SIGTERM);
+    for(int i = 0; i < 20 && ::waitpid(estopWatcherPid_, nullptr, WNOHANG) == 0; ++i)
+    {
+      ::usleep(50000);
+    }
+  }
   if(estopSock_ >= 0)
   {
     ::close(estopSock_);
   }
+}
+
+void KinovaController::startEstopWatcher(const std::string & script)
+{
+  if(!std::getenv("DISPLAY"))
+  {
+    mc_rtc::log::warning("[KinovaController] No DISPLAY: mouse emergency-stop watcher not started");
+    return;
+  }
+  if(::access(script.c_str(), R_OK) != 0)
+  {
+    mc_rtc::log::error("[KinovaController] Mouse emergency-stop watcher not found: {}", script);
+    return;
+  }
+  const std::string port = std::to_string(estopPort_);
+  const pid_t pid = ::fork();
+  if(pid == 0)
+  {
+    // Child: die with the controller process, then become the watcher.
+    ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+    ::execlp("python3", "python3", script.c_str(), "--port", port.c_str(), static_cast<char *>(nullptr));
+    ::_exit(127);
+  }
+  if(pid < 0)
+  {
+    mc_rtc::log::error("[KinovaController] Could not start the mouse emergency-stop watcher ({})",
+                       std::strerror(errno));
+    return;
+  }
+  estopWatcherPid_ = pid;
+  mc_rtc::log::info("[KinovaController] Mouse emergency-stop watcher started (pid {}): {}", pid, script);
 }
 
 bool KinovaController::estopWatcherAlive() const
