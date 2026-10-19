@@ -154,11 +154,11 @@ private:
   int voiceSock_ = -1;
   int voicePort_ = 47801;
   bool voiceTriggerEnabled_ = true;
-  double voiceStartDelay_ = 5.0; // [s] voice -> robot starts (ethics: about 5 s, same in all conditions)
+  double voiceStartDelay_ = 3.0; // [s] voice -> robot starts (3 s, user 2026-10-19; ethics document says about 5 s)
   double voiceLastAlive_ = -1.0e9;
   // Loudness gate (set in the GUI / config): VOICE messages quieter than this are
   // ignored. Live level stats come from the watcher every 0.1 s.
-  double voiceMinLevelDb_ = -35.0; // [dBFS]
+  double voiceMinLevelDb_ = -45.0; // [dBFS] (default -45, user 2026-10-19)
   double micLevelDb_ = -120.0;
   double micFloorDb_ = -120.0;
   double micSpeechFrac_ = 0.0;
