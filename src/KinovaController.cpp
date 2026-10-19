@@ -148,10 +148,12 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   finalEEPosition_ = taskPosition;
 
   // Add GUI
-  gui()->addElement({"KinovaController", "Movement"},
-                    mc_rtc::gui::ArrayInput(
-                        "Direction Vector", {"x", "y", "z"}, [this]() { return directionVec; },
-                        [this](const Eigen::Vector3d & dir) { directionVec = dir; }));
+  // "Movement" tab hidden from the GUI (2026-10-19): it only served the legacy
+  // card-pointing move modes, which are disabled in the FSM.
+  // gui()->addElement({"KinovaController", "Movement"},
+  //                   mc_rtc::gui::ArrayInput(
+  //                       "Direction Vector", {"x", "y", "z"}, [this]() { return directionVec; },
+  //                       [this](const Eigen::Vector3d & dir) { directionVec = dir; }));
 
   // Handover motion-style selector: pick the condition before triggering a pick.
   // Lives at the TOP of the "Bottle picks" panel (added before the button row, and
@@ -175,7 +177,7 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                                             handoverConditionName(), handoverSpeedScale(), handoverAlpha());
                         }));
 
-  gui()->addElement({"KinovaController", "Movement"}, mc_rtc::gui::Point3DRO("Final Position", finalEEPosition_));
+  // gui()->addElement({"KinovaController", "Movement"}, mc_rtc::gui::Point3DRO("Final Position", finalEEPosition_));
   // "Card Positions" tab hidden from the GUI (2026-10-19, not used in the
   // experiment). The positions are still used by NGPoint (cardIndex).
   // gui()->addElement({"KinovaController", "Card Positions"}, mc_rtc::gui::Point3DRO("Card Position 1",
