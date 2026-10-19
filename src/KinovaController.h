@@ -76,6 +76,7 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
     return v;
   }
   long long pendingVoiceEpochMs_ = 0;
+  double pendingVoiceLevelDb_ = 0.0; // level of that request [dBFS]
 
   double handoverDurationFactor() const
   {
@@ -153,6 +154,15 @@ private:
   bool voiceTriggerEnabled_ = true;
   double voiceStartDelay_ = 5.0; // [s] voice -> robot starts (ethics: about 5 s, same in all conditions)
   double voiceLastAlive_ = -1.0e9;
+  // Loudness gate (set in the GUI / config): VOICE messages quieter than this are
+  // ignored. Live level stats come from the watcher every 0.1 s.
+  double voiceMinLevelDb_ = -35.0; // [dBFS]
+  double micLevelDb_ = -120.0;
+  double micFloorDb_ = -120.0;
+  double micSpeechFrac_ = 0.0;
+  double lastVoiceLevelDb_ = -120.0;
+  bool lastVoiceAccepted_ = false;
+  std::string lastVoiceTime_; // HH:MM:SS of the last VOICE message
   bool countdownActive_ = false;
   double countdownStart_ = 0.0; // [s, steady clock]
   long long countdownVoiceEpochMs_ = 0; // wall clock of the VOICE that started it

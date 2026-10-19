@@ -3,8 +3,12 @@
 
 Listens to the USB microphone, decides "is someone speaking?" with WebRTC VAD
 (a speech/non-speech classifier, not a loudness threshold), and when speech
-lasts long enough it sends "VOICE" to KinovaController over loopback UDP
-(127.0.0.1:47801). The controller then starts its countdown (see README).
+lasts long enough it sends "VOICE <level dBFS>" to KinovaController over
+loopback UDP (127.0.0.1:47801). Every 0.1 s it also sends
+"STAT <level> <noise floor> <speech fraction>" so the controller GUI can show
+the live level. The LOUDNESS threshold is set in the controller GUI
+("Voice min level [dBFS]"): the controller ignores VOICE messages quieter than
+it. This script only decides "is it speech?".
 
 NO AUDIO IS SAVED (ethics approval): samples are only analysed in memory.
 The optional --log file contains timestamps and numbers only.
@@ -65,7 +69,7 @@ def main():
     ap.add_argument("--window", type=float, default=0.30, help="speech must fill this window [s] (default 0.30)")
     ap.add_argument("--min-voiced", type=float, default=0.80, help="fraction of speech frames in the window")
     ap.add_argument("--margin-db", type=float, default=8.0, help="speech must be this much above the noise floor")
-    ap.add_argument("--refractory", type=float, default=3.0, help="ignore speech this long after a trigger [s]")
+    ap.add_argument("--refractory", type=float, default=1.0, help="ignore speech this long after a trigger [s]")
     ap.add_argument("--log", default="", help="append trigger timestamps/stats (no audio) to this text file")
     a = ap.parse_args()
 
@@ -77,6 +81,8 @@ def main():
     addr = ("127.0.0.1", a.port)
     nwin = max(1, int(round(a.window * 1000 / FRAME_MS)))
     win = collections.deque(maxlen=nwin)
+    win_lvl = collections.deque(maxlen=nwin)
+    last_stat = 0.0
     noise_db = None
     last_trigger = -1e9
     triggers = 0
@@ -114,19 +120,24 @@ def main():
                 is_speech = vad.is_speech(x.tobytes(), RATE) and lvl > noise_db + a.margin_db
                 speech_frames += is_speech
                 win.append(is_speech)
+                win_lvl.append(lvl)
                 frac = sum(win) / len(win)
                 if (len(win) == nwin and frac >= a.min_voiced and now - last_trigger >= a.refractory):
                     last_trigger = now
                     triggers += 1
+                    voice_db = max(win_lvl)  # loudest frame of the speech window
                     stamp = time.strftime("%H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}"
                     if not a.no_send:
                         for _ in range(3):
-                            sock.sendto(b"VOICE", addr)
-                    print(f"\n[voice] {stamp} TRIGGER #{triggers}  level {lvl:5.1f} dBFS  floor {noise_db:5.1f}"
+                            sock.sendto(f"VOICE {voice_db:.1f}".encode(), addr)
+                    print(f"\n[voice] {stamp} TRIGGER #{triggers}  voice {voice_db:5.1f} dBFS  floor {noise_db:5.1f}"
                           f"{'' if a.no_send else '  -> VOICE sent'}", flush=True)
                     if logf:
-                        logf.write(f"{stamp}\ttrigger\t{triggers}\tlevel_dbfs={lvl:.1f}\tfloor_dbfs={noise_db:.1f}\n")
+                        logf.write(f"{stamp}\ttrigger\t{triggers}\tvoice_dbfs={voice_db:.1f}\tfloor_dbfs={noise_db:.1f}\n")
                         logf.flush()
+                if not a.no_send and now - last_stat >= 0.1:
+                    last_stat = now
+                    sock.sendto(f"STAT {lvl:.1f} {noise_db:.1f} {frac:.2f}".encode(), addr)
                 if now - last_status >= 0.5:
                     last_status = now
                     bar = "#" * int(max(0.0, min(30.0, (lvl + 70.0) / 2.0)))
@@ -134,9 +145,6 @@ def main():
                     sys.stdout.write(f"\r[voice] {time.strftime('%H:%M:%S')} level {lvl:6.1f} dB  floor {noise_db:6.1f} "
                                      f" speech {frac:4.0%}  {bar:<30s} triggers {triggers}{hint}   ")
                     sys.stdout.flush()
-                    if not a.no_send and now - getattr(main, "_alive", 0.0) >= 0.5:
-                        main._alive = now
-                        sock.sendto(b"ALIVE", addr)
         except KeyboardInterrupt:
             pass
     dur = time.time() - t_start

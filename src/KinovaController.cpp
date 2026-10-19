@@ -17,7 +17,9 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 
 namespace
 {
@@ -207,6 +209,7 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
   config("voiceTriggerEnabled", voiceTriggerEnabled_);
   config("voiceStartDelay", voiceStartDelay_);
   config("voicePort", voicePort_);
+  config("voiceMinLevelDb", voiceMinLevelDb_);
   if(!(voiceStartDelay_ > 0.0))
   {
     mc_rtc::log::error_and_throw<std::runtime_error>("[KinovaController] voiceStartDelay must be > 0 (got {})",
@@ -253,40 +256,68 @@ KinovaController::KinovaController(mc_rbdyn::RobotModulePtr rm, double dt, const
                     pickButton(bottleLabels[1], "Bottle2"), pickButton(bottleLabels[2], "Bottle3"),
                     pickButton(bottleLabels[3], "Bottle4"));
   // Voice countdown status and controls, right under the pick buttons.
-  gui()->addElement({"KinovaController", "Bottle picks"},
-                    mc_rtc::gui::Label("Voice",
-                                       [this]() -> std::string
-                                       {
-                                         if(!voiceTriggerEnabled_)
-                                         {
-                                           return "OFF (bottle buttons start immediately)";
-                                         }
-                                         const bool alive = steadyNow() - voiceLastAlive_ < 2.0;
-                                         if(countdownActive_)
-                                         {
-                                           const double left =
-                                               std::max(0.0, voiceStartDelay_ - (steadyNow() - countdownStart_));
-                                           return fmt::format("COUNTDOWN {:.1f} s -> {}", left,
-                                                              reservedTarget_.empty() ? std::string("(press a bottle)")
-                                                                                      : reservedLabel_);
-                                         }
-                                         if(executor_.state() != "KinovaController_Initial")
-                                         {
-                                           return "robot busy";
-                                         }
-                                         return alive ? std::string("waiting for voice")
-                                                      : std::string("waiting (voice_trigger.py NOT running)");
-                                       }),
-                    mc_rtc::gui::NumberInput(
-                        "Voice start delay [s]", [this]() { return voiceStartDelay_; },
-                        [this](double v)
-                        {
-                          if(v > 0.0)
-                          {
-                            voiceStartDelay_ = v;
-                            mc_rtc::log::info("[Voice] Start delay -> {:.1f} s", v);
-                          }
-                        }));
+  gui()->addElement(
+      {"KinovaController", "Bottle picks"},
+      mc_rtc::gui::Label(
+          "Voice",
+          [this]() -> std::string
+          {
+            if(!voiceTriggerEnabled_)
+            {
+              return "OFF (bottle buttons start immediately)";
+            }
+            const bool alive = steadyNow() - voiceLastAlive_ < 2.0;
+            if(countdownActive_)
+            {
+              const double left = std::max(0.0, voiceStartDelay_ - (steadyNow() - countdownStart_));
+              return fmt::format("COUNTDOWN {:.1f} s -> {}", left,
+                                 reservedTarget_.empty() ? std::string("(press a bottle)") : reservedLabel_);
+            }
+            if(executor_.state() != "KinovaController_Initial")
+            {
+              return "robot busy";
+            }
+            return alive ? std::string("waiting for voice") : std::string("waiting (voice_trigger.py NOT running)");
+          }),
+      mc_rtc::gui::Label("Mic level",
+                         [this]() -> std::string
+                         {
+                           if(steadyNow() - voiceLastAlive_ >= 2.0)
+                           {
+                             return "no data (voice_trigger.py not running)";
+                           }
+                           const int n = static_cast<int>(std::max(0.0, std::min(30.0, (micLevelDb_ + 70.0) / 2.0)));
+                           return fmt::format("{:6.1f} dBFS  {}  (noise {:.1f}, speech {:.0f}%)", micLevelDb_,
+                                              std::string(static_cast<size_t>(n), '|'), micFloorDb_,
+                                              micSpeechFrac_ * 100.0);
+                         }),
+      mc_rtc::gui::Label("Last voice",
+                         [this]() -> std::string
+                         {
+                           if(lastVoiceTime_.empty())
+                           {
+                             return "-";
+                           }
+                           return fmt::format("{}  {:.1f} dBFS  {}", lastVoiceTime_, lastVoiceLevelDb_,
+                                              lastVoiceAccepted_ ? "ACCEPTED" : "REJECTED (below threshold)");
+                         }),
+      mc_rtc::gui::NumberInput(
+          "Voice min level [dBFS]", [this]() { return voiceMinLevelDb_; },
+          [this](double v)
+          {
+            voiceMinLevelDb_ = v;
+            mc_rtc::log::info("[Voice] Minimum voice level -> {:.1f} dBFS", v);
+          }),
+      mc_rtc::gui::NumberInput(
+          "Voice start delay [s]", [this]() { return voiceStartDelay_; },
+          [this](double v)
+          {
+            if(v > 0.0)
+            {
+              voiceStartDelay_ = v;
+              mc_rtc::log::info("[Voice] Start delay -> {:.1f} s", v);
+            }
+          }));
   gui()->addElement({"KinovaController", "Bottle picks"}, mc_rtc::gui::ElementsStacking::Horizontal,
                     mc_rtc::gui::Button("Simulate voice", [this]() { startCountdown("GUI button"); }),
                     mc_rtc::gui::Button("Cancel countdown",
@@ -478,9 +509,40 @@ void KinovaController::pollVoice()
     }
     buf[len] = '\0';
     voiceLastAlive_ = steadyNow();
-    if(std::strncmp(buf, "VOICE", 5) == 0)
+    if(std::strncmp(buf, "STAT", 4) == 0)
     {
-      startCountdown("microphone");
+      double l = 0, f = 0, sp = 0;
+      if(std::sscanf(buf + 4, "%lf %lf %lf", &l, &f, &sp) == 3)
+      {
+        micLevelDb_ = l;
+        micFloorDb_ = f;
+        micSpeechFrac_ = sp;
+      }
+    }
+    else if(std::strncmp(buf, "VOICE", 5) == 0)
+    {
+      double l = 0.0;
+      const bool hasLevel = std::sscanf(buf + 5, "%lf", &l) == 1;
+      const std::time_t now = std::time(nullptr);
+      char hms[16];
+      std::strftime(hms, sizeof(hms), "%H:%M:%S", std::localtime(&now));
+      if(lastVoiceTime_ == hms && hasLevel && l == lastVoiceLevelDb_)
+      {
+        continue; // the watcher sends each VOICE three times
+      }
+      lastVoiceTime_ = hms;
+      lastVoiceLevelDb_ = hasLevel ? l : 0.0;
+      lastVoiceAccepted_ = !hasLevel || l >= voiceMinLevelDb_;
+      if(!lastVoiceAccepted_)
+      {
+        mc_rtc::log::info("[Voice] Ignored: {:.1f} dBFS is below the minimum {:.1f} dBFS", l, voiceMinLevelDb_);
+        continue;
+      }
+      if(!countdownActive_ && executor_.state() == "KinovaController_Initial")
+      {
+        pendingVoiceLevelDb_ = lastVoiceLevelDb_;
+      }
+      startCountdown(fmt::format("microphone, {:.1f} dBFS", lastVoiceLevelDb_));
     }
   }
 }

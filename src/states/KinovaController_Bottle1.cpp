@@ -235,8 +235,8 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
       const long long voiceMs = ctl.consumeVoiceEpochMs();
       if(voiceMs > 0)
       {
-        runLog_.meta(fmt::format("voice_request_epoch_ms: {} (start {:.3f} s after the request)", voiceMs,
-                                 (epochMs - voiceMs) / 1000.0));
+        runLog_.meta(fmt::format("voice_request_epoch_ms: {} (start {:.3f} s after the request, voice {:.1f} dBFS)",
+                                 voiceMs, (epochMs - voiceMs) / 1000.0, ctl.pendingVoiceLevelDb_));
       }
       else
       {
