@@ -11,6 +11,7 @@
 #include <Eigen/Core>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
@@ -215,11 +216,22 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
     const size_t reserveRows = static_cast<size_t>(std::max(runLogReserveSec_, 1.0) / (ctl.timeStep * decim)) + 1;
     if(runLog_.begin(runLogDir_, name() + "_" + ctl.handoverConditionName(), cols, reserveRows))
     {
-      const std::time_t now = std::time(nullptr);
-      char when[32];
-      std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+      // Wall-clock start with millisecond precision, so a run can be aligned
+      // with the heart-rate samples and the video clock (both wall-clock).
+      // t=0 of the rows below is this instant (within one control tick).
+      const auto nowTp = std::chrono::system_clock::now();
+      const long long epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(nowTp.time_since_epoch()).count();
+      const std::time_t now = std::chrono::system_clock::to_time_t(nowTp);
+      std::tm tmLocal;
+      ::localtime_r(&now, &tmLocal);
+      char whenSec[32];
+      char tz[8];
+      std::strftime(whenSec, sizeof(whenSec), "%Y-%m-%d %H:%M:%S", &tmLocal);
+      std::strftime(tz, sizeof(tz), "%z", &tmLocal);
+      const std::string when = fmt::format("{}.{:03d} {}", whenSec, static_cast<int>(epochMs % 1000), tz);
       runLog_.meta(fmt::format("state: {}", name()));
       runLog_.meta(fmt::format("started: {}", when));
+      runLog_.meta(fmt::format("started_epoch_ms: {}", epochMs));
       runLog_.meta(fmt::format("robot: {}", ctl.robot().name()));
       runLog_.meta(fmt::format("timestep: {}", ctl.timeStep));
       runLog_.meta(fmt::format("decimation: {}", decim));
