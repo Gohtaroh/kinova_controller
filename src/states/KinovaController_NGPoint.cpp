@@ -370,10 +370,24 @@ bool KinovaController_NGPoint::run(mc_control::fsm::Controller & ctl_)
       if(segmentDone(ctl_, /*requireConvergence=*/false))
       {
         ++jabsDone_;
-        if(jabsDone_ <= maxRepeats_)
+        // Always pull back after a jab, including the last one, so the gesture
+        // ends in the retracted pose, not pointing at the card (2026-10-19).
+        initSegment(ctl_, cardOffset(ctl_, retractDistance_), retractSpeed_, /*continuous=*/true);
+        phase_ = RETRACT;
+      }
+      break;
+    case RETRACT:
+    {
+      const bool lastRetract = jabsDone_ > maxRepeats_;
+      // No convergence wait on the last retract either: the joint-space return
+      // starts from the current q (no jump), as it did right after the last jab
+      // before. Waiting for the 1 cm tolerance cost the full 3 s grace in tests.
+      if(segmentDone(ctl_, /*requireConvergence=*/false))
+      {
+        if(!lastRetract)
         {
-          initSegment(ctl_, cardOffset(ctl_, retractDistance_), retractSpeed_, /*continuous=*/true);
-          phase_ = RETRACT;
+          initSegment(ctl_, cardOffset(ctl_, pointDistance_), approachSpeed_, /*continuous=*/true);
+          phase_ = POINT;
         }
         else
         {
@@ -399,13 +413,7 @@ bool KinovaController_NGPoint::run(mc_control::fsm::Controller & ctl_)
         }
       }
       break;
-    case RETRACT:
-      if(segmentDone(ctl_, /*requireConvergence=*/false))
-      {
-        initSegment(ctl_, cardOffset(ctl_, pointDistance_), approachSpeed_, /*continuous=*/true);
-        phase_ = POINT;
-      }
-      break;
+    }
     case RETURN_TO_HOME:
       if(jointMoveDone(ctl_, /*requireConvergence=*/true))
       {
