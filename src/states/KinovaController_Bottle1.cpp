@@ -260,7 +260,7 @@ void KinovaController_Bottle1::start(mc_control::fsm::Controller & ctl_)
       runLog_.meta(fmt::format("alpha: {}", alpha_));
       runLog_.meta(fmt::format("arm_delay: {}", armDelay_));
       runLog_.meta(fmt::format("duration_factor: {} (move duration = factor * distance / (speed * speed_scale); "
-                               "same for every condition)",
+                               "per condition, default 1 + 0.875 * alpha = equal commanded peak speed)",
                                durationFactor_));
       runLog_.meta(fmt::format("lateral_offset: {}", lateralOffset_));
       runLog_.meta(fmt::format("approach_pt: {} {} {}", approachPt_.x(), approachPt_.y(), approachPt_.z()));

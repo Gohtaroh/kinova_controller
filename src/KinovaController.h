@@ -57,16 +57,14 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
   {
     return handoverConditionNames_[handoverCondition_];
   }
-  // Move-duration factor shared by EVERY condition (2026-10-19). Every condition-
-  // styled move takes tf = factor * distance / (speed * speedScale), independent of
-  // the condition's alpha, so all three conditions take the SAME time for the same
-  // move and differ only in the SHAPE of the velocity profile (alpha: constant
-  // velocity vs minimum jerk). This is NOT a profile parameter.
-  // Reference values: 1.0 = old Tool timing, 1.4375 = old Baseline timing
-  // (default, Baseline motion unchanged), 1.875 = old Partner timing. The peak
-  // speed of a condition is (1 + 0.875 * alpha) / factor times `speed`, i.e. with
-  // the default Tool ~0.70x and Partner ~1.30x of Baseline's peak. Set 1.875 to keep
-  // every condition's peak at or below `speed` (e.g. to stay under a speed cap).
+  // Move-duration factor of the ACTIVE condition (2026-11-09: per condition again).
+  // Every condition-styled move takes tf = factor * distance / (speed * speedScale).
+  // Default factor = 1 + 0.875 * alpha: the commanded peak speed is then
+  // `speed * speedScale` for EVERY condition and only the shape of the velocity
+  // profile is manipulated; the move time follows from alpha (Tool 1.0, Baseline
+  // 1.4375, Partner 1.875 = the 7/24 pilot behaviour, confirmed by the professor
+  // 2026-10-28/29). The common factor of 2026-10-19 (equal durations) was rejected.
+  // YAML `handoverDurationFactors: [...]` (one entry per condition) overrides it.
   /** Wall-clock time [epoch ms] of the voice request that started the pick that is
    *  starting now, or 0 if it was not voice-triggered. Cleared when read. */
   long long consumeVoiceEpochMs()
@@ -84,7 +82,7 @@ struct KinovaController_DLLAPI KinovaController : public mc_control::fsm::Contro
 
   double handoverDurationFactor() const
   {
-    return handoverDurationFactor_;
+    return handoverDurationFactors_[handoverCondition_];
   }
   // Baseline (centre) condition speed scale, for states that compress the
   // condition spread around the centre (NGPoint) instead of using the full one.
@@ -128,10 +126,17 @@ private:
   std::vector<std::string> handoverConditionNames_ = {"Tool", "Baseline", "Partner"};
   std::vector<double> handoverSpeedScales_ = {1.1, 1.1, 1.1};
   std::vector<double> handoverAlphas_ = {0.0, 0.5, 1.0};
-  std::vector<double> handoverArmDelays_ = {3.0, 2.0, 0.2}; // [s] settle before pull detection arms
+  // [s] settle before the joint-based pull detection arms. 2026-11-09 (user decision:
+  // every release-timing parameter identical across conditions): 3.0 s for all, the
+  // value Tool needed against its post-stop drift. The moving-average release path
+  // (armed 0.8 s after the stop, same for every condition) and the before-stop release
+  // are what actually fire in practice (real robot 2026-11-09: trigger 5 in all three),
+  // so the longer delay costs Baseline/Partner nothing. Was {3.0, 2.0, 0.2}.
+  std::vector<double> handoverArmDelays_ = {3.0, 3.0, 3.0};
   size_t handoverCondition_ = 1; // default: Baseline
-  // Common move-duration factor (see handoverDurationFactor()).
-  double handoverDurationFactor_ = 1.4375;
+  // Per-condition move-duration factors (see handoverDurationFactor()). Filled in
+  // the constructor: 1 + 0.875 * alpha unless `handoverDurationFactors` is configured.
+  std::vector<double> handoverDurationFactors_;
 
   // --- Software emergency stop via mouse middle-click (2026-10-19) -----------
   // scripts/estop_mouse.py watches the X11 middle mouse button and sends UDP
@@ -148,6 +153,19 @@ private:
   int voiceWatcherPid_ = -1;
   /** Fork `python3 script args...` as a child that dies with the controller. */
   int startWatcher(const std::string & what, const std::string & script, const std::vector<std::string> & args);
+  // Watcher supervision (2026-11-09). Before a start, other processes running the
+  // same script (a copy that survived an earlier mc_kortex and still holds the mic,
+  // or one started by hand) are killed; a watcher that exits or stops reporting is
+  // restarted every few seconds (maintainWatchers, from run()); stopWatcher falls
+  // back to SIGKILL when SIGTERM is ignored.
+  std::string estopScript_; // empty = autostart off
+  std::string voiceScript_;
+  int killStaleWatchers(const std::string & script, bool wait);
+  void stopWatcher(int & pid);
+  void maintainWatchers();
+  double watcherCheckAt_ = 0.0; // [s, steady clock]
+  double estopRetryAt_ = 0.0;
+  double voiceRetryAt_ = 0.0;
   void pollEmergencyStop();
 
   // --- Voice trigger (2026-10-19) ---------------------------------------------
@@ -167,6 +185,12 @@ private:
   double micLevelDb_ = -120.0;
   double micFloorDb_ = -120.0;
   double micSpeechFrac_ = 0.0;
+  // Mute detection (2026-11-09, after a session lost to the fifine's mute button):
+  // the watcher flags STAT blocks whose samples are all exactly zero; a level below
+  // voiceMuteLevelDb_ counts as well. After 1 s the GUI and the terminal warn.
+  double voiceMuteLevelDb_ = -90.0; // [dBFS] (config voiceMuteLevelDb)
+  double micZeroFor_ = 0.0; // [s]
+  bool micMuted_ = false;
   double lastVoiceLevelDb_ = -120.0;
   bool lastVoiceAccepted_ = false;
   std::string lastVoiceTime_; // HH:MM:SS of the last decided utterance

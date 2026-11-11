@@ -3,7 +3,7 @@
 
 Listens to the USB microphone and, every 0.1 s, sends to KinovaController
 over loopback UDP (127.0.0.1:47801):
-    STAT <level dBFS> <noise floor dBFS> <speech fraction 0-1> <peak dBFS>
+    STAT <level dBFS> <noise floor dBFS> <speech fraction 0-1> <peak dBFS> <all-zero 0/1>
 "speech fraction" is the share of 30 ms frames in that 0.1 s that
   * WebRTC VAD (a speech/non-speech classifier, not a loudness threshold) judged
     to be speech,
@@ -26,6 +26,7 @@ mic at a time: stop the controller first (or this script) if the mic is busy.
 """
 import argparse
 import math
+import os
 import signal
 import socket
 import sys
@@ -87,7 +88,10 @@ def main():
     ap.add_argument("--quiet", action="store_true", help="no live status line (used when the controller starts it)")
     a = ap.parse_args()
 
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
+    # Stopped by the controller with SIGTERM: leave at once. (2026-11-09: raising
+    # KeyboardInterrupt from the handler left a watcher alive after mc_kortex quit,
+    # holding the mic so the next mc_kortex could not start its own.)
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
     dev = find_device(a.device)
     if dev is None:
         sys.exit(f"[voice] input device containing '{a.device}' not found (is the mic plugged in?)")
@@ -98,6 +102,7 @@ def main():
     t_start = time.time()
     frames = zero_frames = speech_frames = 0
     blk_speech = blk_n = 0
+    blk_zero = 0  # frames in this block whose samples are all exactly zero (muted / no signal)
     blk_peak = -120.0
     run_s = gap_s = 0.0  # display-only utterance tracking
     marked = 0
@@ -117,6 +122,7 @@ def main():
                 peak_db = max(peak_db, lvl)
                 if not np.any(x):
                     zero_frames += 1
+                    blk_zero += 1
                 if noise_db is None:
                     noise_db = lvl
                 elif lvl < noise_db:
@@ -133,7 +139,10 @@ def main():
                     continue
                 frac = blk_speech / blk_n
                 try:
-                    sock.sendto(f"STAT {lvl:.1f} {noise_db:.1f} {frac:.2f} {blk_peak:.1f}".encode(), addr)
+                    # 5th field (2026-11-09): 1 = every sample of this block was exactly zero,
+                    # i.e. the mic is muted or delivers no signal (the controller shows a warning).
+                    sock.sendto(f"STAT {lvl:.1f} {noise_db:.1f} {frac:.2f} {blk_peak:.1f} "
+                                f"{1 if blk_zero == blk_n else 0}".encode(), addr)
                 except OSError:
                     pass
                 # Display-only utterance tracking (same idea as the controller).
@@ -154,6 +163,7 @@ def main():
                         print(f"\n[voice] {time.strftime('%H:%M:%S')} speech >= {a.show_duration:.1f} s (#{marked}), "
                               f"peak {blk_peak:.1f} dBFS", flush=True)
                 blk_speech = blk_n = 0
+                blk_zero = 0
                 blk_peak = -120.0
                 now = time.time()
                 if not a.quiet and now - last_status >= 0.5:

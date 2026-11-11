@@ -91,13 +91,18 @@ private:
   // Slightly lowered 2026-07-23 (x~0.8 from the first real-robot values): the
   // Tool condition was brisk enough to nudge the bench/bottles, so the whole
   // pick runs a touch slower across all conditions.
-  double approachSpeed_ = 0.16; // home -> above the bottle
-  double graspSpeed_ = 0.08; // gentle straight-down descent onto the bottle
-  double liftSpeed_ = 0.12; // straight-up lift off the table
-  // Peak joint speeds [rad/s] for the joint-space back half (BottlePick's 0.8,
-  // lowered with the rest).
-  double presentSpeed_ = 0.65; // lift point -> present pose
-  double returnSpeed_ = 0.65; // present pose -> home
+  // 2026-11-09 (user decision): raised again, the same for every condition, so the
+  // whole pick is shorter while the condition differences (alpha only) and the
+  // duration ratio Tool 1 : Baseline 1.44 : Partner 1.875 are untouched. Targets
+  // Tool ~7 s / Partner ~12.5 s to the present pose (Bottle1); was 0.16 / 0.08 /
+  // 0.12 m/s and 0.65 rad/s (Tool 9.2 / Partner 16.0 s). Still below the 7/24
+  // x1.5 Tool that nudged the bench (0.24 / 0.12 / 0.18 m/s, 0.975 rad/s).
+  double approachSpeed_ = 0.19; // home -> above the bottle
+  double graspSpeed_ = 0.11; // straight-down descent onto the bottle
+  double liftSpeed_ = 0.15; // straight-up lift off the table
+  // Peak joint speeds [rad/s] for the joint-space back half.
+  double presentSpeed_ = 0.75; // lift point -> present pose
+  double returnSpeed_ = 0.75; // present pose -> home
 
   // --- Pull-to-release detection at the present pose (copied from BottlePick) -
   double pullJoint4Thresh_ = 0.5;
